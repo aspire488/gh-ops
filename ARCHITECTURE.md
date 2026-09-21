@@ -1335,7 +1335,8 @@ Critical invariant: A failed collector MUST NOT cause valid previous state to di
 - Phase 5 tests: 106
 - Phase 6 tests: 75
 - Phase 7 tests: 165
-- **Total: 734/734 passing**
+- Local secrets tooling tests: 31
+- **Total: 765/765 passing**
 - Security audit: 0 FAIL / 0 WARN
 
 **Verification:** `verify-change` at `standard` tier.

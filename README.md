@@ -17,7 +17,7 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
 | Phase 7 — Telegram Notifications | ✅ Complete | 734/734 tests |
 
-**Total: 734/734 tests passing.**
+**Total: 765/765 tests passing.**
 
 ## Architecture
 
@@ -29,12 +29,46 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 # Install dependencies
 pip install -r requirements.txt
 
-# Set GitHub token
-export GITHUB_TOKEN="ghp_..."
+# Configure secrets locally (the file is gitignored)
+cp .env.example .env
+# then edit .env and fill in the values
 
 # Run locally
 python scripts/run_local.py daily
+
+# Check Telegram delivery configuration (prints no secrets)
+python scripts/check_telegram.py
 ```
+
+## Local Secrets (`.env`)
+
+Secrets live in environment variables, never in source or config. For local
+development you can keep them in a gitignored `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is **gitignored** (`.gitignore`: `.env`, `.env.*`) — confirm with
+`git check-ignore -v .env`. Only `.env.example`, which holds no values, is tracked.
+
+| Variable | Used by | Notes |
+|----------|---------|-------|
+| `TELEGRAM_BOT_TOKEN` | Phase 7 Telegram delivery | The **only** variable consulted for the bot token |
+| `GITHUB_TOKEN` / `GH_TOKEN` | Phases 2–6 GitHub collection | Either name works |
+
+Loading rules (`src/utils/env.py`, standard library only — no new dependency):
+
+- The process environment **always wins**. `.env` never overrides a variable that
+  is already set, so a CI secret cannot be shadowed by a stale local file.
+- Values are never logged or printed. `load_env_file()` returns variable *names*.
+- A missing `.env` is a no-op, so production runs are unaffected.
+- Comment lines, blank lines, an `export` prefix, quoted values, and ` #` inline
+  comments are supported.
+
+`python scripts/check_telegram.py` reports readiness using booleans, counts, and
+the token length only — it never prints the token, so its output is safe to paste
+into a terminal or a CI log. It exits non-zero when delivery is not ready.
 
 ## GitHub Authentication
 
@@ -434,6 +468,7 @@ python -m pytest tests/core/ -v
 | `monitors/*` (properties) | 5 | Property tests for MonitorResult invariants |
 | `utils/text.py` | 23 | MarkdownV2 escaping, split, truncate |
 | `utils/time.py` | 16 | Timestamps, relative time |
+| `utils/env.py` | 31 | .env parsing, precedence, secret safety |
 | `intelligence/oss/models.py` | 9 | Opportunity, ScoreBreakdown, from_search_result |
 | `intelligence/oss/queries.py` | 16 | Query generation, dedup, config, custom queries |
 | `intelligence/oss/filters.py` | 23 | 9 filter rules, bot detection, config parsing |
@@ -447,7 +482,7 @@ python -m pytest tests/core/ -v
 | `notifications/telegram.py` (transport) | 40 | Send, 4xx/5xx, retries, Retry-After, token safety |
 | `notifications/telegram.py` (formatters) | 47 | Escaping, splitting, long messages, determinism |
 | `notifications/telegram.py` (notifier) | 33 | Routing, failure isolation, safe skipping |
-| **Total** | **734** | |
+| **Total** | **765** | |
 
 ## Project Structure
 
@@ -470,9 +505,10 @@ gh-ops/
 │   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
 │   ├── notifications/  # Outbound Telegram delivery (Phase 7)
 │   └── utils/          # Logging, text, time helpers
-├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml)
+├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml, telegram.yml)
+├── .env.example        # Tracked template; real .env is gitignored
 ├── data/               # Runtime state (gitignored)
-├── tests/              # Test suite (734 tests)
+├── tests/              # Test suite (765 tests)
 └── scripts/            # Local development scripts
 ```
 

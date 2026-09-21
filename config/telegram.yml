@@ -1,18 +1,14 @@
 telegram:
-  enabled: false
+  enabled: true
   # The bot token is read from this environment variable ONLY.
   # Never put the token in this file.
   bot_token_ref: "TELEGRAM_BOT_TOKEN"
-  chat_ids: []
-  # Example:
-  # chat_ids:
-  #   - chat_id: 123456789
-  #     topics:
-  #       - alerts
-  #       - oss_opportunities
-  #   - chat_id: 987654321
-  #     topics:
-  #       - developer_report
+  chat_ids:
+    - chat_id: 2146008061
+      topics:
+        - alerts
+        - oss_opportunities
+        - developer_report
   # A chat with no `topics` receives every topic.
   # Topics: alerts, oss_opportunities, developer_report
 

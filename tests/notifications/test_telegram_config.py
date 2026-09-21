@@ -243,10 +243,19 @@ class TestLoadTelegramConfig:
 
     def test_loads_from_disk_by_default(self):
         config = load_telegram_config()
-        # config/telegram.yml ships disabled with no chats configured.
-        assert config.enabled is False
-        assert config.targets == ()
-        assert config.max_length == TELEGRAM_MAX_MESSAGE_LENGTH
+        # config/telegram.yml is deployment configuration: it may be enabled or
+        # disabled and may list chats. Assert only invariants that must always
+        # hold, so changing the shipped config cannot break this test.
+        assert isinstance(config, TelegramConfig)
+        assert 0 < config.max_length <= TELEGRAM_MAX_MESSAGE_LENGTH
+        assert config.timeout_seconds > 0
+        assert config.retry_attempts >= 0
+        assert all(target.chat_id for target in config.targets)
+
+    def test_shipped_config_parses_to_a_valid_config(self):
+        config = load_telegram_config()
+        # Whatever the deployment says, the token is never part of it.
+        assert "token" not in str(config.to_dict()).lower().replace("bot_token_ref", "")
 
     def test_missing_section_uses_defaults(self):
         config = load_telegram_config({"telegram": {}})

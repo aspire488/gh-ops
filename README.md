@@ -12,7 +12,7 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 1 — Core Runtime | Complete | 112/112 |
 | Phase 2 — GitHub API Client | Complete | 73/73 |
 | Phase 3 — State & Event Engine | Complete | 106/106 |
-| Phase 4 — Repository Monitoring | Pending | — |
+| Phase 4 — Repository Monitoring | ✅ Complete | 388/388 tests |
 | Phase 5 — OSS Intelligence | Pending | — |
 | Phase 6 — Developer Intelligence | Pending | — |
 | Phase 7 — Notifications | Pending | — |
@@ -242,16 +242,22 @@ python -m pytest tests/core/ -v
 | `github/client.py` | 16 | GET-only, retry, pagination, ETags |
 | `github/models.py` | 19 | 8 dataclasses, from_api, to_dict |
 | `github/collectors.py` | 23 | 7 collectors, mocked responses |
+| `monitors/repository.py` | 12 | Repository event evaluation, collection failures |
+| `monitors/ci.py` | 12 | CI workflow event evaluation, failures, recovery |
+| `monitors/release.py` | 12 | Release event evaluation, prerelease/draft filtering |
+| `monitors/endpoint.py` | 26 | Security validation, config parsing, URL checks |
+| `monitors/__init__.py` | 12 | Registry, event dispatch, summary |
+| `monitors/monitor.py` | 14 | MonitorResult model, classification, properties |
 | `utils/text.py` | 13 | Markdown escaping, split, truncate |
 | `utils/time.py` | 14 | Timestamps, relative time |
-| **Total** | **291** | |
+| **Total** | **388** | |
 
 ## Project Structure
 
 ```
 gh-ops/
 ├── src/
-│   ├── core/           # Config, state, events, errors, rate limiting
+│   ├── core/           # Config, state, events, errors, rate limiting, monitor model
 │   ├── github/         # API client, auth, collectors, models
 │   │   ├── auth.py     # Token resolution (env vars only)
 │   │   ├── client.py   # Single HTTP exit point (GET-only)
@@ -259,12 +265,17 @@ gh-ops/
 │   │   └── collectors/ # Thin data-fetching wrappers
 │   ├── intelligence/   # OSS hunter, release/security radars
 │   ├── developer/      # Personal activity, statistics, reports
-│   ├── monitors/       # Repository, CI, release monitoring
+│   ├── monitors/       # Repository, CI, release, endpoint monitors
+│   │   ├── __init__.py # Monitor registry and evaluator
+│   │   ├── repository.py # Repository metadata monitoring
+│   │   ├── ci.py       # CI/workflow failure/recovery detection
+│   │   ├── release.py  # Release event monitoring
+│   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
 │   ├── notifications/  # Telegram adapter
 │   └── utils/          # Logging, text, time helpers
 ├── config/             # YAML configuration files
 ├── data/               # Runtime state (gitignored)
-├── tests/              # Test suite (185 tests)
+├── tests/              # Test suite (388 tests)
 └── scripts/            # Local development scripts
 ```
 

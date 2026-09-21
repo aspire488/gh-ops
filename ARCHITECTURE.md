@@ -1297,15 +1297,23 @@ Critical invariant: A failed collector MUST NOT cause valid previous state to di
 
 **Verification:** `verify-change` at `standard` tier.
 
-### Phase 4 — Repository Monitoring
+### Phase 4 — Repository Monitoring ✅ COMPLETE
 
 **Goal:** Track repository health and changes.
 
-- [ ] `src/monitors/repository.py` — Stars, forks, issues, PRs tracking
-- [ ] `src/monitors/ci.py` — Workflow failure/recovery detection
-- [ ] `src/monitors/release.py` — New release detection
-- [ ] `config/monitoring.yml` — Monitor toggles
-- [ ] Tests
+Implemented:
+- [x] `src/core/monitor.py` — MonitorResult model, MonitorStatus, MonitorCategory
+- [x] `src/monitors/__init__.py` — Monitor registry and evaluator
+- [x] `src/monitors/repository.py` — Repository metadata monitoring (stars, forks, issues, archival)
+- [x] `src/monitors/ci.py` — CI/workflow failure/recovery detection
+- [x] `src/monitors/release.py` — Release event monitoring (new, prerelease, draft)
+- [x] `src/monitors/endpoint.py` — HTTP endpoint health checks with full SSRF protection
+- [x] `config/monitoring.yml` — Monitor configuration (enabled/disabled, thresholds)
+- [x] Tests: 97 new (models, registry, repository, CI, release, endpoint security, properties)
+- [x] Security analysis: SSRF, loopback, metadata, DNS rebinding documented
+- [x] Property-based testing: MonitorResult, classify_changes_as_alert
+
+**Total: 388/388 passing**
 
 **Verification:** `verify-change` at `standard` tier.
 

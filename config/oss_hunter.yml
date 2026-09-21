@@ -1,7 +1,19 @@
 oss_hunter:
   enabled: true
   max_results: 10
+  max_queries: 20
+  per_query_max_pages: 3
 
+  # Languages to search for (empty = use default categories)
+  languages: []
+
+  # Query categories to use (empty = all categories)
+  categories: []
+
+  # Additional custom queries
+  custom_queries: []
+
+  # Manual queries (legacy, still supported)
   queries:
     - "label:\"good first issue\" language:python is:open"
     - "label:\"help wanted\" language:python is:open"
@@ -16,11 +28,16 @@ oss_hunter:
       - "duplicate"
       - "invalid"
       - "wip"
+      - "not-a-bug"
     exclude_bot_authors: true
     exclude_locked: true
+    exclude_draft: true
+    exclude_pull_requests: true
     min_repo_stars: 5
     max_issue_age_days: 90
     exclude_repos: []
+    require_labels: []
+    require_language: null
 
   scoring:
     weights:
@@ -49,6 +66,12 @@ oss_hunter:
       "easy": 0.7
       "bug": 0.5
       "documentation": 0.6
+      "starter": 0.95
+      "newbie": 0.85
+
+  dedup:
+    enabled: true
+    merge_source_queries: true
 
   tie_breaking:
     method: "issue_number_asc"

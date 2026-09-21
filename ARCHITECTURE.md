@@ -139,10 +139,10 @@ gh-ops/
 │   │       └── repos.py          # Repository discovery by criteria
 │   │
 │   ├── developer/
-│   │   ├── __init__.py
-│   │   ├── activity.py           # Personal GitHub activity collection
-│   │   ├── statistics.py         # Aggregate stats (weekly/monthly)
-│   │   └── reports.py            # Report formatting for Telegram
+│   │   ├── __init__.py           # Public API
+│   │   ├── activity.py           # Normalized activity from Phase 3 state/events
+│   │   ├── statistics.py         # Descriptive statistics over activity
+│   │   └── reports.py            # Structured DeveloperReport (Phase 7 consumes)
 │   │
 │   ├── monitors/
 │   │   ├── __init__.py
@@ -1038,8 +1038,16 @@ src/intelligence/oss/queries.py
 src/monitors/*
     → (uses) client.py, state.py, events.py
 
-src/developer/*
-    → (uses) client.py, state.py
+src/developer/activity.py
+    → (uses) core/events.py, core/models.py, utils/time.py
+    → (NEVER) github/client.py, requests, notifications/*
+
+src/developer/statistics.py
+    → (uses) developer/activity.py (pure aggregation, no I/O)
+
+src/developer/reports.py
+    → (uses) developer/activity.py, developer/statistics.py
+    → (emits) DeveloperReport for Phase 7 notification formatting
 
 src/notifications/telegram.py
     → (calls) Telegram Bot API
@@ -1292,7 +1300,10 @@ Critical invariant: A failed collector MUST NOT cause valid previous state to di
 - Phase 1 tests: 112
 - Phase 2 tests: 73
 - Phase 3 tests: 106
-- **Total: 291/291 passing**
+- Phase 4 tests: 97 (includes 5 property tests)
+- Phase 5 tests: 106
+- Phase 6 tests: 75
+- **Total: 569/569 passing**
 - Security audit: 0 FAIL / 0 WARN
 
 **Verification:** `verify-change` at `standard` tier.
@@ -1317,29 +1328,143 @@ Implemented:
 
 **Verification:** `verify-change` at `standard` tier.
 
-### Phase 5 — OSS Intelligence
+### Phase 5 — OSS Intelligence ✅ COMPLETE
 
 **Goal:** Discover contribution opportunities.
 
-- [ ] `src/intelligence/oss/queries.py` — Search query construction
-- [ ] `src/intelligence/oss/hunter.py` — Opportunity orchestration
-- [ ] `src/intelligence/oss/filters.py` — Noise filtering (deterministic)
-- [ ] `src/intelligence/oss/scorer.py` — Deterministic scoring (adapted from UEA scoring patterns)
-- [ ] `config/oss_hunter.yml` — Hunter configuration
-- [ ] OSS opportunity state tracking
-- [ ] Tests (property-based + unit)
+Implemented:
+- [x] `src/intelligence/oss/models.py` — Opportunity frozen dataclass, ScoreBreakdown, from_search_result parser
+- [x] `src/intelligence/oss/queries.py` — Multi-query strategy with 7 default categories, deduplication, config/custom query support
+- [x] `src/intelligence/oss/filters.py` — 9 filter rules (excluded labels, bot authors, locked, draft, min stars, max age, excluded repos, required labels, required language)
+- [x] `src/intelligence/oss/scorer.py` — 7 transparent scoring signals with configurable weights, decay functions, 5 tie-breaking methods
+- [x] `src/intelligence/oss/dedup.py` — Identity-based dedup `(repo, issue_number)`, merges source_queries provenance, idempotent
+- [x] `src/intelligence/oss/hunter.py` — Orchestrator: queries → search → enrich → filter → score → dedup → sort → top-N
+- [x] `src/intelligence/oss/__init__.py` — Public API
+- [x] `config/oss_hunter.yml` — Updated with dedup, categories, languages, custom_queries config
+- [x] Tests: 106 total (models, queries, filters, scorer, dedup, hunter)
+- [x] Security audit: 0 FAIL / 0 WARN (no write ops, no LLM, no dangerous patterns)
 
-**Verification:** `verify-change` at `strict` tier + property testing.
+**Total: 494/494 passing**
 
-### Phase 6 — Developer Intelligence
+**Verification:** `verify-change` at `standard` tier.
+
+### Phase 6 — Developer Intelligence ✅ COMPLETE
 
 **Goal:** Personal activity reports.
 
-- [ ] `src/developer/activity.py` — Activity collection
-- [ ] `src/developer/statistics.py` — Stats aggregation
-- [ ] `src/developer/reports.py` — Report formatting
-- [ ] `data/history/` — Historical data for trend analysis
-- [ ] Tests
+Implemented:
+- [x] `src/developer/activity.py` — Activity normalization: ActivityRecord, ActivityType, DataQuality, extract_activity, filter_activity, deduplicate_activity, summarize_activity
+- [x] `src/developer/statistics.py` — Descriptive statistics: ActivityCounts, RepoActivity, PeriodActivity, compute_counts, compute_by_repository, compute_by_period, compute_active_repositories, compute_active_days, compute_date_range, summarize_data_quality
+- [x] `src/developer/reports.py` — Structured reports: DeveloperReport, ReportPeriod (last N days, this week, this month), generate_report, format_summary
+- [x] `src/developer/__init__.py` — Public API
+- [x] Tests: 75 total (activity extraction, statistics, reports, filtering, dedup, data quality)
+
+Key design decisions:
+- Activity timestamps from resource fields (created_at, closed_at, merged_at), NOT collection time
+- No LLM, no scoring, no personality inference — descriptive only
+- Data quality tracked per collector — failed collector ≠ zero activity
+- Closed issues/merged PRs detected on NEW events (first observation)
+- All models frozen dataclasses, deterministic serialization
+
+#### Activity Model
+
+`ActivityRecord` (frozen dataclass) carries `activity_type`, `timestamp`,
+`repository`, `item_id`, `title`, `state`, `url`, `meta`.
+
+`item_id` is the deterministic identity of the thing that happened:
+`owner/repo#123` for issues/PRs, the tag name for releases, `workflow/{id}`
+for workflow runs.
+
+| ActivityType | Timestamp source | Emitted when |
+|--------------|------------------|--------------|
+| `issue_created` | `created_at` | NEW issue event |
+| `issue_closed` | `closed_at` | `state` CHANGED to `closed`, or already closed on first observation |
+| `issue_commented` | `updated_at` | `comments` count increased |
+| `pr_opened` | `created_at` | NEW pull event |
+| `pr_merged` | `merged_at` | `merged` CHANGED to true, or already merged on first observation |
+| `pr_closed` | `closed_at` | `state` CHANGED to `closed` with no merge evidence |
+| `release_published` | `published_at` | NEW release event |
+| `workflow_run` | `run_started_at` (fallback `created_at`) | NEW or CHANGED workflow event |
+
+No activity is fabricated: a record is emitted only when the corresponding
+resource field exists and parses to a UTC datetime.
+
+#### Statistics
+
+`statistics.py` is pure aggregation over `ActivityRecord` lists — no I/O.
+
+- `ActivityCounts` — per-type counts plus `total`
+- `compute_by_repository()` — one `RepoActivity` per repository (counts and distinct item IDs)
+- `compute_by_period()` — fixed-width `PeriodActivity` buckets
+- `compute_active_days()`, `compute_active_repositories()`, `compute_date_range()`
+- `summarize_data_quality()` — collector completeness percentage
+
+#### Reports and Reporting Periods
+
+`generate_report()` is the entry point: deduplicate → bound to period →
+compute statistics → attach data-quality context.
+
+`ReportPeriod` presets: `last(days)`, `this_week()` (Monday 00:00 UTC),
+`this_month()` (1st 00:00 UTC). Report bounds are `since` inclusive and
+`until` inclusive; `by_period` buckets are `[start, end)`.
+
+`DeveloperReport.to_dict()` is the deterministic serialized output shape.
+
+#### Data-Quality Semantics
+
+Every collector entry in `CurrentState.update_log` becomes a `DataQuality`
+record.
+
+| Collector status | `is_complete` | Effect on the report |
+|------------------|---------------|----------------------|
+| success | `True` | counts treated as complete |
+| not_modified | `False` | prior items preserved, flagged |
+| failure | `False` (+ `error`) | **never** reported as zero activity |
+
+`DeveloperReport.is_complete` is true only when `completeness_pct == 100.0`.
+`format_summary()` surfaces an explicit completeness warning below 100%.
+
+#### State / Event Integration
+
+```
+CurrentState (resources)                 Phase 3 events (ResourceEvent)
+        │                                         │
+        └── diff_resources(prev={}, cur=…) ───────┤
+                                                  ▼
+                                    extract_activity()
+                                                  ▼
+                            (ActivityRecord[], DataQuality[])
+```
+
+Current state supplies the snapshot of what exists; Phase 3 events supply
+transitions observed between runs (for example open → closed). Both paths run
+through the same extractors, and `deduplicate_activity()` collapses anything
+produced twice (key: activity_type, item_id, timestamp).
+
+#### Determinism
+
+- Frozen dataclasses; no mutable global state and no randomness in aggregation
+- Records sorted by timestamp; `by_repository` sorted by total descending then
+  name; `by_period` chronological; `active_repositories` sorted
+- Identical input yields identical counts, `by_repository`, and record ordering
+- Two values are generation-time by construction, and therefore differ between
+  runs: `generated_at`, and the trailing `by_period` bucket's `period_end`, which
+  is clamped to the reference time. Passing an explicit `reference_time` to
+  `compute_by_period()` makes bucket boundaries fully reproducible.
+
+#### Limitations
+
+- Coverage is bounded by what Phase 2/3 collected; Phase 6 performs no backfill
+- Workflow runs are not attributed to a developer (the normalized record has no
+  user field), so per-user reports still include collected workflow runs
+- Releases and workflow runs carry no repository name in the normalized record
+  and therefore group under `(unknown)` in per-repository breakdowns
+- A PR already closed-without-merge at first observation yields only
+  `pr_opened`, because the close transition was never observed
+- No trend or persistence layer: a report describes one period from one snapshot
+- No evaluation of any kind — no productivity, quality, or behavioural judgement
+
+**Total: 569/569 passing**
 
 **Verification:** `verify-change` at `standard` tier.
 

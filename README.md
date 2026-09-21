@@ -15,9 +15,12 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 4 — Repository Monitoring | ✅ Complete | 388/388 tests |
 | Phase 5 — OSS Intelligence | ✅ Complete | 494/494 tests |
 | Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
-| Phase 7 — Telegram Notifications | ✅ Complete | 734/734 tests |
+| Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
+| Phase 8 — GitHub Actions | ✅ Complete | 1054/1054 tests |
 
-**Total: 765/765 tests passing.**
+**Total: 1054/1054 tests passing.**
+
+Figures are cumulative as of the end of each phase.
 
 ## Architecture
 
@@ -36,9 +39,29 @@ cp .env.example .env
 # Run locally
 python scripts/run_local.py daily
 
+# Or run a job directly — the same entry point the workflows use
+python -m src.jobs status        # read-only: report current state + config
+python -m src.jobs daily
+
 # Check Telegram delivery configuration (prints no secrets)
 python scripts/check_telegram.py
 ```
+
+### Running a Job
+
+The dispatcher is the same code path in CI and locally:
+
+```bash
+python -m src.jobs <job_name>          # daily | monitoring | weekly-report
+                                       # oss-hunt | security | status
+GHOPS_JOB=weekly-report python -m src.jobs
+
+python -m src.jobs                     # prints usage and exits 1
+python -m src.jobs not-a-job           # prints available jobs, exits 1
+```
+
+Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
+A job never exits 0 without having executed one.
 
 ## Local Secrets (`.env`)
 
@@ -431,6 +454,102 @@ telegram:
 - Digest scheduling (daily/weekly jobs) belongs to Phase 8; this phase provides
   formatting and delivery only
 
+## GitHub Actions (Phase 8)
+
+Actions is the scheduler; the application stays in Python.
+
+```
+trigger (cron / workflow_dispatch)
+        ↓
+python -m src.jobs          ← job name read from GHOPS_JOB
+        ↓
+core/dispatcher.py
+        ↓
+src/jobs/jobs.py            ← collect → state/events → monitors/intelligence/developer
+        ↓
+Telegram                    ← outbound only
+```
+
+The only substantive step in any workflow is `python -m src.jobs`. No expression
+is interpolated into a shell command, and no business logic lives in YAML.
+
+### Workflows
+
+| Workflow | Schedule (UTC) | Job | Purpose |
+|----------|----------------|-----|---------|
+| `daily.yml` | `0 8 * * *` | `daily` | Collection, release/CI detection, alert digest |
+| `monitoring.yml` | `0 */2 * * *` | `monitoring` | CI failures + security alerts |
+| `weekly-report.yml` | `0 9 * * 1` | `weekly-report` | Personal activity report |
+| `oss-hunter.yml` | `0 10 * * *` | `oss-hunt` | OSS opportunity discovery |
+| `security.yml` | `0 6 * * *` | `security` | Dependabot + code scanning |
+| `manual.yml` | on demand | any | `workflow_dispatch` with a `choice` job input |
+
+All six also support manual dispatch. Every job has a 25-minute timeout.
+
+### Permissions
+
+Every workflow declares explicit **read-only** scopes. Nothing has `write`.
+
+| Workflow | `contents` | `issues` | `pull-requests` | `actions` | `security-events` |
+|----------|-----------|----------|-----------------|-----------|-------------------|
+| `daily.yml` | read | read | read | read | — |
+| `monitoring.yml` | read | — | — | read | read |
+| `weekly-report.yml` | read | read | read | — | — |
+| `oss-hunter.yml` | read | read | — | — | — |
+| `security.yml` | read | — | — | — | read |
+| `manual.yml` | read | read | read | read | read |
+
+Note the key is `security-events` (hyphen); `security_events` is not a valid
+permission name.
+
+### Secrets
+
+| Secret | Used for |
+|--------|----------|
+| `GITHUB_TOKEN` | Repository data collection (read-only scopes above) |
+| `TELEGRAM_BOT_TOKEN` | Outbound delivery |
+
+Both are provided through the `env:` block only — never as CLI arguments, never
+in a cache key, never in `run:` text. Add `TELEGRAM_BOT_TOKEN` under
+*Settings → Secrets and variables → Actions*. `GITHUB_TOKEN` is automatic.
+
+### State Persistence
+
+Actions cache carries `data/state/` between runs. It is a rolling snapshot, not
+a database:
+
+- **Restore** uses the shared prefix `gh-ops-state-`, which resolves to the most
+  recently created snapshot regardless of which workflow wrote it.
+- **Save** uses a fresh immutable key
+  (`gh-ops-state-<job>-${{ github.run_id }}-${{ github.run_attempt }}`), because
+  cache entries cannot be overwritten.
+- A `${{ github.run_id }}`-only key would be unusable as the restore path, since
+the next run can never hit it exactly.
+- All state-writing workflows share one `concurrency: gh-ops-state` group with
+  `cancel-in-progress: false`, serializing the read-modify-write cycle against
+  the single shared state file.
+
+### Failure Behavior
+
+| Condition | Result |
+|-----------|--------|
+| One repository fails to collect | Job succeeds; other repositories still collected, previous state preserved |
+| Bad config, missing credentials, unreadable state | Job fails, exit 1, state not saved |
+| Telegram delivery fails | Job still succeeds; state was already persisted |
+| Unknown or missing job name | Exit 1 |
+
+A job invocation never exits 0 without having executed a job.
+
+### Limitations
+
+- The state cache is evicted after **7 idle days** of no runs, and lives in a
+  shared **10 GB LRU pool** that grows by one entry per successful run.
+- GitHub runs at most one *running* plus one *pending* run per concurrency group;
+  a third queued run replaces the pending one.
+- `GITHUB_TOKEN` may be refused by the Dependabot alerts endpoint. When that
+  happens the collector is recorded as a partial failure and previous state is
+  preserved — the system never reports "no alerts" for a check it could not run.
+
 ## Local Testing
 
 All tests use mocked HTTP responses — no live GitHub contact:
@@ -442,7 +561,14 @@ python -m pytest tests/ -v
 # Run specific module tests
 python -m pytest tests/github/ -v
 python -m pytest tests/core/ -v
+
+# Validate the workflow YAML, permissions, pins, and state strategy
+python -m pytest tests/ci/ -v
 ```
+
+Workflow validation is static: it parses `.github/workflows/*.yml` and asserts
+the security and state invariants documented below. It never triggers a workflow
+or contacts GitHub.
 
 ### Test Coverage
 
@@ -478,11 +604,15 @@ python -m pytest tests/core/ -v
 | `developer/activity.py` | 38 | Activity extraction, filtering, dedup, data quality |
 | `developer/statistics.py` | 21 | Counts, repo breakdown, periods, active days |
 | `developer/reports.py` | 16 | Report generation, periods, formatting |
-| `notifications/telegram.py` (config) | 42 | Token resolution, config validation, chat routing |
+| `notifications/telegram.py` (config) | 43 | Token resolution, config validation, chat routing |
 | `notifications/telegram.py` (transport) | 40 | Send, 4xx/5xx, retries, Retry-After, token safety |
 | `notifications/telegram.py` (formatters) | 47 | Escaping, splitting, long messages, determinism |
 | `notifications/telegram.py` (notifier) | 33 | Routing, failure isolation, safe skipping |
-| **Total** | **765** | |
+| `core/dispatcher.py` (CLI) | 24 | Exit codes, env-var job selection, module + `run_local.py` entry points |
+| `jobs/jobs.py` | 34 | Six jobs, dispatch, partial failure, delivery isolation |
+| `jobs/*` (architecture) | 17 | Dependency direction, no HTTP/LLM/eval in the job layer |
+| `.github/workflows/*` | 213 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
+| **Total** | **1054** | |
 
 ## Project Structure
 
@@ -504,11 +634,16 @@ gh-ops/
 │   │   ├── release.py  # Release event monitoring
 │   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
 │   ├── notifications/  # Outbound Telegram delivery (Phase 7)
+│   ├── jobs/           # Thin job orchestration for Actions (Phase 8)
+│   │   ├── __main__.py # python -m src.jobs <job_name>
+│   │   ├── pipeline.py # Shared plumbing: config, collection, state, diff
+│   │   └── jobs.py     # The six jobs + registration
 │   └── utils/          # Logging, text, time helpers
+├── .github/workflows/  # Six Actions workflows (thin: they call python -m src.jobs)
 ├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml, telegram.yml)
 ├── .env.example        # Tracked template; real .env is gitignored
-├── data/               # Runtime state (gitignored)
-├── tests/              # Test suite (765 tests)
+├── data/               # Runtime state (gitignored, carried by Actions cache)
+├── tests/              # Test suite (1054 tests)
 └── scripts/            # Local development scripts
 ```
 

@@ -5,8 +5,8 @@ this module is just the dispatcher that routes jobs to the right code.
 """
 from __future__ import annotations
 
+import os
 import sys
-import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -32,6 +32,9 @@ class JobResult:
     errors: ErrorCollector = field(default_factory=ErrorCollector)
     data: dict[str, Any] = field(default_factory=dict)
 
+
+#: Environment variable used to select a job when no CLI argument is given.
+JOB_ENV_VAR = "GHOPS_JOB"
 
 # Type alias for job functions
 JobFunc = Callable[..., JobResult]
@@ -133,26 +136,61 @@ def register_job(name: str) -> Callable[[JobFunc], JobFunc]:
     return decorator
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point for running jobs.
 
-    Usage: python -m src.core.dispatcher <job_name>
+    Usage::
+
+        python -m src.core.dispatcher <job_name>
+        python -m src.core <job_name>
+
+    The job name may also be supplied through the ``GHOPS_JOB`` environment
+    variable. That is how workflow_dispatch inputs reach the runtime: the value
+    is passed as an environment variable and never interpolated into a shell
+    command (see ARCHITECTURE.md, "Preventing Workflow Injection").
+
+    Args:
+        argv: Argument list. Defaults to ``sys.argv[1:]``.
+
+    Returns:
+        Process exit code: 0 on success, 1 for an unknown job or a failed job.
+        Never returns 0 without having executed a job.
     """
-    if len(sys.argv) < 2:
+    args = list(sys.argv[1:] if argv is None else argv)
+    job_name = args[0].strip() if args else ""
+    if not job_name:
+        job_name = os.environ.get(JOB_ENV_VAR, "").strip()
+
+    if not job_name:
         jobs = _default_dispatcher.list_jobs()
-        print("Usage: python -m src.core.dispatcher <job_name>")
+        print(f"Usage: python -m src.jobs <job_name> (or set {JOB_ENV_VAR})")
         if jobs:
             print(f"Available jobs: {', '.join(jobs)}")
         else:
             print("No jobs registered.")
-        sys.exit(1)
+        return 1
 
-    job_name = sys.argv[1]
     try:
         result = _default_dispatcher.run(job_name)
-        if not result.success:
-            print(result.errors.summary(), file=sys.stderr)
-            sys.exit(1)
     except KeyError as e:
         print(str(e), file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+    if not result.success:
+        print(result.errors.summary(), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    # Without this guard, `python -m src.core.dispatcher <job>` imports the
+    # module and exits 0 without running anything: a green check that silently
+    # did no work. It must always execute, or exit non-zero.
+    #
+    # Imported lazily so that the dispatcher itself stays free of any
+    # dependency on the job layer.
+    from src.jobs.jobs import register_all_jobs
+
+    register_all_jobs(_default_dispatcher)
+    raise SystemExit(main())

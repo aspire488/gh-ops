@@ -155,6 +155,12 @@ gh-ops/
 │   │   ├── __init__.py           # Public API
 │   │   └── telegram.py           # Outbound Telegram Bot API adapter
 │   │
+│   ├── jobs/
+│   │   ├── __init__.py           # Public API
+│   │   ├── __main__.py           # CLI entry point: python -m src.jobs <job>
+│   │   ├── pipeline.py           # Shared plumbing (config, collection, state)
+│   │   └── jobs.py               # The six jobs + registration
+│   │
 │   └── utils/
 │       ├── __init__.py
 │       ├── logging.py            # Structured collector logging
@@ -199,6 +205,14 @@ gh-ops/
 │   ├── developer/
 │   │   ├── __init__.py
 │   │   └── test_statistics.py
+│   ├── jobs/
+│   │   ├── __init__.py
+│   │   ├── test_jobs.py          # Job dispatch, partial failure, isolation
+│   │   ├── test_dispatcher_cli.py # Exit codes, env-var job selection, entry points
+│   │   └── test_architecture_boundary.py # Dependency direction
+│   ├── ci/
+│   │   ├── __init__.py
+│   │   └── test_workflows.py     # Static workflow validation
 │   ├── monitors/
 │   │   ├── __init__.py
 │   │   ├── test_repository.py
@@ -690,48 +704,193 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 
 ## H. GitHub Actions Architecture
 
+### Execution Layer
+
+Actions is the **scheduler**; it is not the application. The entire job body is
+one command:
+
+```yaml
+- name: Run daily job
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    GHOPS_JOB: daily
+  run: python -m src.jobs
+```
+
+`src/jobs/` is the thin orchestration layer that sits between Actions and the
+existing runtime. Each job is a short sequence of calls into public APIs that
+Phases 1–7 already expose:
+
+```
+GitHub Actions (schedule / dispatch)
+        ↓
+python -m src.jobs            ← reads GHOPS_JOB from the environment
+        ↓
+core/dispatcher.py            ← routes job name → function
+        ↓
+src/jobs/jobs.py              ← one function per job
+        ↓
+jobs/pipeline.py              ← collect → apply → diff → persist
+        ↓
+collectors → core/state → monitors / intelligence / developer
+        ↓
+notifications/telegram.py     ← outbound delivery only
+```
+
+The six jobs, one per workflow:
+
+| Job | Collects | Then runs | Writes state |
+|-----|----------|-----------|--------------|
+| `daily` | repos, issues, pulls, releases, workflows | Phase 4 monitors + alert digest | yes |
+| `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
+| `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
+| `oss-hunt` | — | Phase 5 hunter + delivery | no |
+| `security` | security | — | yes |
+| `status` | — | read-only state/config report | no |
+
+`jobs.py` and `pipeline.py` contain **no business logic**: no scoring, no
+statistics, no diffing, no formatting, no HTTP. If a behaviour is not already
+owned by a Phase 1–7 module, it does not belong in this layer.
+
 ### Workflow Map
 
-| Workflow | Trigger | Purpose | Permissions |
-|----------|---------|---------|-------------|
-| `daily.yml` | `cron '0 8 * * *'` + `workflow_dispatch` | Repository collection, release detection, CI status, daily digest | `contents:read`, `issues:read`, `pull-requests:read`, `actions:read` |
-| `monitoring.yml` | `cron '0 */2 * * *'` + `workflow_dispatch` | CI failure detection, security alert checks | `contents:read`, `actions:read`, `security_events:read` |
-| `weekly-report.yml` | `cron '0 9 * * 1'` + `workflow_dispatch` | Personal activity, statistics, weekly report | `contents:read`, `issues:read`, `pull-requests:read` |
-| `oss-hunter.yml` | `cron '0 10 * * *'` + `workflow_dispatch` | OSS opportunity discovery + scoring + Telegram delivery | `contents:read`, `issues:read` |
-| `security.yml` | `cron '0 6 * * *'` + `workflow_dispatch` | Dependabot alerts, code scanning | `contents:read`, `security_events:read` |
-| `manual.yml` | `workflow_dispatch` only | On-demand operations | Read-only (varies) |
+| Workflow | Trigger | Job | Permissions |
+|----------|---------|-----|-------------|
+| `daily.yml` | `cron '0 8 * * *'` + `workflow_dispatch` | `daily` | `contents:read`, `issues:read`, `pull-requests:read`, `actions:read` |
+| `monitoring.yml` | `cron '0 */2 * * *'` + `workflow_dispatch` | `monitoring` | `contents:read`, `actions:read`, `security-events:read` |
+| `weekly-report.yml` | `cron '0 9 * * 1'` + `workflow_dispatch` | `weekly-report` | `contents:read`, `issues:read`, `pull-requests:read` |
+| `oss-hunter.yml` | `cron '0 10 * * *'` + `workflow_dispatch` | `oss-hunt` | `contents:read`, `issues:read` |
+| `security.yml` | `cron '0 6 * * *'` + `workflow_dispatch` | `security` | `contents:read`, `security-events:read` |
+| `manual.yml` | `workflow_dispatch` only | any of the six | union of the above, all read-only |
+
+All schedules are UTC. Every job has `timeout-minutes: 25`, matching
+`settings.yml`. The schedules are staggered and non-overlapping so that two runs
+rarely contend for the state cache.
 
 ### Workflow Design Principles
 
 1. **Thin workflows.** All logic in Python modules.
 2. **Explicit permissions.** No speculative write permissions.
-3. **Pinned actions.** Use SHA-pinned third-party actions.
-4. **Secrets in env vars.** Never in CLI arguments.
-5. **No untrusted interpolation.** Never `${{ github.event.* }}` in `run:` steps.
+3. **SHA-pinned actions.** Third-party actions are pinned to a full commit SHA
+   with a version comment, so the pin is auditable.
+4. **Secrets in env vars.** Never in CLI arguments, never in cache keys.
+5. **No untrusted interpolation.** No `${{ }}` expression appears inside any
+   `run:` step; the `manual.yml` job name is a constrained `choice` input passed
+   through the environment.
 6. **Timeout limits.** Every job has a timeout.
-7. **Cache state.** Use GitHub Actions cache for `data/state/`.
+7. **Cache state.** GitHub Actions cache carries `data/state/` between runs.
+
+Every one of these is enforced by `tests/ci/test_workflows.py`, which parses the
+workflow YAML and fails the suite if a future edit weakens any of them.
+
+### Failure Behaviour
+
+| Condition | Result |
+|-----------|--------|
+| A collector fails for one repository | Job succeeds. Failed collector is recorded, other repositories still collected, previous state preserved (Phase 3 partial-failure semantics). |
+| Every repository fails for a collector | That collector is marked FAILURE; state keeps the previous valid items. |
+| Bad config / no credentials / unreadable state | Job fails, exit code 1, no state is saved. |
+| Telegram delivery fails or raises | Job still succeeds. Delivery is the last step and state is already persisted, so a Telegram outage cannot discard collected data. |
+| Unknown job name | Exit code 1. |
+| No job name supplied | Exit code 1 with usage text. |
+
+A job **must never exit 0 without having executed a job**. This is why
+`python -m src.jobs` (and `python -m src.core.dispatcher`) end with
+`raise SystemExit(main())` and why `main()` returns 1 rather than 0 when it has
+nothing to run. An earlier draft of this document specified
+`python -m src.core.dispatcher run daily`, which both named a non-existent `run`
+sub-command and omitted the `__main__` guard — a green CI check that collected
+nothing. See "Known Limitations" below.
 
 ### State Persistence in Actions
 
+**GitHub Actions cache is not a mutable store.** A cache entry is immutable once
+written, entries are evicted after 7 idle days, and total cache storage is a
+10 GB LRU pool per repository. The design therefore treats the cache as a
+**rolling snapshot**, not a database.
+
+The rule that matters: **the restore path must never depend on a run-specific
+key.** A key containing `${{ github.run_id }}` is unique to one run, so the next
+run can never hit it exactly and would depend entirely on a prefix fallback
+working. Instead, restore is *explicitly* prefix-based and the unique key is used
+only for the save:
+
 ```yaml
-# In each workflow:
-- name: Restore state cache
-  uses: actions/cache@v4
+- name: Restore state
+  uses: actions/cache/restore@<sha>   # v6.1.0
   with:
     path: data/state
-    key: gh-ops-state-${{ github.run_id }}
+    # Unique primary key → always misses on a fresh run, so the
+    # restore-keys prefix below is what actually resolves the snapshot.
+    key: gh-ops-state-daily-${{ github.run_id }}-${{ github.run_attempt }}
     restore-keys: |
       gh-ops-state-
 
-- name: Run operation
-  run: python -m src.core.dispatcher run daily
+- name: Run daily job
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    GHOPS_JOB: daily
+  run: python -m src.jobs
 
-- name: Save state cache
-  uses: actions/cache@v4
+- name: Save state
+  if: success()
+  uses: actions/cache/save@<sha>     # v6.1.0
   with:
     path: data/state
-    key: gh-ops-state-${{ github.run_id }}
+    # Caches are immutable, so each successful run needs a fresh key.
+    key: gh-ops-state-daily-${{ github.run_id }}-${{ github.run_attempt }}
 ```
+
+Restoring by the shared `gh-ops-state-` prefix means a run picks up the **most
+recently created** snapshot, whichever workflow wrote it. That is correct because
+all state-writing workflows share one state file, `data/state/current_state.json`.
+
+### Concurrency
+
+Every workflow that reads and writes the state file joins one concurrency group:
+
+```yaml
+concurrency:
+  group: gh-ops-state
+  cancel-in-progress: false
+```
+
+This matters because a run is a read-modify-write cycle against a single file:
+restore → mutate → save. Two runs doing that simultaneously could each save a
+snapshot that omits the other's update. Serializing them removes the race.
+
+`cancel-in-progress: false` is deliberate. Cancelling a run that has already
+persisted state would discard that update.
+
+`oss-hunter.yml` is **not** in the group, because the hunter job neither reads
+nor writes state; it only sends a Telegram message.
+
+### Known Limitations of the Actions Layer
+
+1. **Cache eviction.** If no workflow runs for 7 days, the state cache is
+   evicted and the next run starts from empty state. For a system scheduled at
+   least once every two hours this does not occur in normal operation, but it is
+   a real consequence of using the cache as the store. GitHub also deletes caches
+   on repository archive and after a period of inactivity.
+2. **Cache growth.** Each successful run adds a new immutable entry. Older
+   entries age out of the 10 GB LRU pool, but the pool is shared with any other
+   cache use in the repository. This is the cost of not needing a durable store.
+3. **Concurrency queue depth.** GitHub guarantees at most one *running* and one
+   *pending* run per concurrency group; if a third run arrives it replaces the
+   pending one. With staggered schedules this is not expected to bite, but a
+   backlog of manual dispatches could drop a queued run.
+4. **Dependabot via `GITHUB_TOKEN`.** The Dependabot alerts endpoint generally
+   requires a token with explicit security-event access, which the default
+   `GITHUB_TOKEN` may not be granted. When refused, the collector is recorded as
+   a partial failure and previous state is preserved; the system does not report
+   "no alerts" for a check it could not perform.
+5. **Cache is not a lock.** The concurrency group serializes runs *within* one
+   repository's Actions. A local run against the same state directory is not
+   coordinated with it.
+6. **No secrets are cached.** `data/state/` holds only collected GitHub data and
+   ETags; tokens are environment variables only.
 
 ---
 
@@ -782,20 +941,37 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 
 ### Preventing Workflow Injection
 
-1. No `${{ github.event.* }}` in `run:` steps.
-2. Untrusted data via env vars, not shell interpolation.
-3. No `eval()`, no `exec()`, no shell string interpolation of payloads.
-4. Python entry points use env vars, not parsed event JSON.
+1. **No expression interpolation in `run:` steps.** Not a single `${{ }}`
+   appears in any shell command in any workflow. This is asserted by test.
+2. **Job selection travels through the environment.** The dispatcher reads
+   `GHOPS_JOB`, so the shell never parses the value.
+3. **`manual.yml` constrains its input.** The job name is a `choice` input, so
+   GitHub limits it to the six enumerated values before it reaches the runner.
+4. **No event payload is referenced at all.** No workflow mentions
+   `github.event.*`; there is no payload this pipeline needs.
+5. No `eval()`, no `exec()`, no shell string interpolation of payloads.
+6. Python entry points use env vars, not parsed event JSON.
+
+### Preventing Supply-Chain Compromise
+
+1. **Every third-party action is pinned to a full 40-character commit SHA.**
+   Mutable tags such as `@v4` can be repointed at new code after review.
+2. **Every pin carries a version comment** (`# v6.3.0`) so the pin stays
+   human-auditable, and the approved SHAs are asserted by test.
+3. Only three actions are used: `actions/checkout`, `actions/setup-python`, and
+   `actions/cache`. Nothing else is introduced.
 
 ### Preventing Unsafe Fork Execution
 
 1. No `pull_request_target` workflows with fork code checkout.
-2. No execution of code from untrusted sources.
-3. `manual.yml` runs only on `workflow_dispatch` from maintainers.
+2. No workflow triggers on `pull_request` at all: nothing in this pipeline runs
+   on untrusted code.
+3. No execution of code from untrusted sources.
+4. `manual.yml` runs only on `workflow_dispatch` from maintainers.
 
 ### Workflow Permission Audit
 
-| Workflow | `contents` | `issues` | `pull-requests` | `actions` | `security_events` |
+| Workflow | `contents` | `issues` | `pull-requests` | `actions` | `security-events` |
 |----------|-----------|----------|-----------------|-----------|-------------------|
 | `daily.yml` | read | read | read | read | — |
 | `monitoring.yml` | read | — | — | read | read |
@@ -804,7 +980,12 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 | `security.yml` | read | — | — | — | read |
 | `manual.yml` | read | read | read | read | read |
 
-No workflow has `write` permissions in V1.
+No workflow has `write` permissions in V1, and every workflow declares its
+permissions explicitly rather than relying on repository defaults.
+
+Note the spelling: the scope key is `security-events` with a hyphen. The
+underscore form `security_events` is not a valid key and would be silently
+ignored, leaving the token without the access the collector needs.
 
 ---
 
@@ -815,24 +996,50 @@ No workflow has `write` permissions in V1.
 **Runtime state is NOT committed to Git.**
 
 Instead:
-- GitHub Actions cache persists state between runs
+- GitHub Actions cache persists state between runs (see §H,
+  "State Persistence in Actions", for the rolling-key design and its limits)
 - `data/state/` is gitignored
 - State is restored at workflow start, saved at workflow end
 
 ### State Files
 
+Phase 3 stores one consolidated state document rather than one file per
+resource type. Resource types are keys inside it:
+
 ```
 data/state/
-├── repos.json              # Repository metadata snapshots
-├── issues.json             # Last-seen issue states per repo
-├── pulls.json              # Last-seen PR states per repo
-├── releases.json           # Last-seen release per repo
-├── workflows.json          # Last-seen workflow run states
-├── security_alerts.json    # Last-seen security alerts
-├── oss_opportunities.json  # Already-reported opportunities
-├── user_activity.json      # Last-seen personal activity
+├── current_state.json      # Consolidated state: resources, etags, update_log
 └── etags.json              # ETag cache for conditional requests
+
+data/history/
+└── <timestamped>.json      # History entries (written by save_history)
 ```
+
+`current_state.json` holds:
+
+```json
+{
+  "schema_version": 2,
+  "last_updated": "2026-09-21T08:00:00+00:00",
+  "resources": {
+    "repos":     { "owner/name": { "...": "..." } },
+    "issues":    { "owner/name#123": { "...": "..." } },
+    "pulls":     { "owner/name#45": { "...": "..." } },
+    "releases":  { "owner/name@v1.2.3": { "...": "..." } },
+    "workflows": { "owner/name/run/123": { "...": "..." } },
+    "security":  { "owner/name/dependabot/9": { "...": "..." } },
+    "user":      { "login": { "...": "..." } }
+  },
+  "etags": { "collector": "etag-value" },
+  "update_log": {
+    "repos": { "status": "success", "observed_at": "...", "item_count": 12 }
+  }
+}
+```
+
+Each job collects only the resource types it needs, and `apply_snapshot`
+**preserves resource types that are not in the snapshot**. That is what makes it
+safe for `security.yml` to run against state that `daily.yml` last wrote.
 
 ### State Schema
 
@@ -1082,6 +1289,26 @@ src/notifications/telegram.py
               results are consumed structurally, precisely so that the delivery
               layer never pulls in the GitHub client
     → no Phase 1–6 module imports notifications (no reverse dependency)
+
+src/jobs/pipeline.py
+    → (uses) core/config.py, core/state.py, core/events.py, core/models.py,
+             github/client.py, github/collectors/*, utils/logging.py
+    → composes the public APIs; contains no intelligence or scoring of its own
+
+src/jobs/jobs.py
+    → (uses) jobs/pipeline.py, monitors/*, intelligence/oss/hunter.py,
+             developer/activity.py, developer/reports.py, notifications/telegram.py
+    → (never) requests, urllib, httpx: the job layer composes modules, it does
+              not perform I/O itself
+    → (never) LLM, agent, MCP, or UEA runtime dependencies
+    → (never) eval/exec/subprocess
+
+src/core/dispatcher.py
+    → (used by) src/jobs/*
+    → imports src.jobs.* only inside `if __name__ == "__main__":`, so importing
+      the dispatcher as a library does not load the job layer
+    → no Phase 1–7 library module imports src.jobs at module scope; this is
+      enforced by tests/jobs/test_architecture_boundary.py
 ```
 
 ---
@@ -1328,16 +1555,25 @@ Critical invariant: A failed collector MUST NOT cause valid previous state to di
 
 #### Test Results
 
-- Phase 1 tests: 112
-- Phase 2 tests: 73
-- Phase 3 tests: 106
-- Phase 4 tests: 97 (includes 5 property tests)
-- Phase 5 tests: 106
-- Phase 6 tests: 75
-- Phase 7 tests: 165
-- Local secrets tooling tests: 31
-- **Total: 765/765 passing**
+Cumulative suite totals by subsystem. These are reproducible with
+`pytest --collect-only` and sum exactly to the suite total; per-phase cumulative
+figures are in the README status table.
+
+- `tests/core/` — 182 (config, state, events, errors, models, rate limit, dispatcher)
+- `tests/github/` — 73 (client, auth, models, collectors)
+- `tests/monitors/` — 97 (includes 5 property tests)
+- `tests/utils/` — 70 (text, time, .env loading)
+- `tests/intelligence/` — 106 (models, queries, filters, scorer, dedup, hunter)
+- `tests/developer/` — 75 (activity, statistics, reports)
+- `tests/notifications/` — 163 (telegram config, transport, formatters, notifier)
+- `tests/jobs/` — 75 (job dispatch, CLI entry points, architecture boundary)
+- `tests/ci/` — 213 (static workflow validation)
+- **Total: 1054 passing**
 - Security audit: 0 FAIL / 0 WARN
+
+`ruff` and `mypy` are declared development dependencies but were not installed in
+the working environment, so those two checks were not run and are not claimed to
+have passed.
 
 **Verification:** `verify-change` at `standard` tier.
 
@@ -1377,7 +1613,7 @@ Implemented:
 - [x] Tests: 106 total (models, queries, filters, scorer, dedup, hunter)
 - [x] Security audit: 0 FAIL / 0 WARN (no write ops, no LLM, no dangerous patterns)
 
-**Total: 494/494 passing**
+**Total: 106 Phase 5 tests** (part of the suite total)
 
 **Verification:** `verify-change` at `standard` tier.
 
@@ -1605,26 +1841,93 @@ prevent delivery to the others.
 - Digest scheduling and composition (daily/weekly jobs) belongs to Phase 8; this
   phase only provides formatting and delivery.
 
-**Total: 734/734 passing**
+**Total: 165 Phase 7 tests** (part of the suite total)
 
 **Verification:** `verify-change` at `standard` tier.
 
-### Phase 8 — GitHub Actions Workflows
+### Phase 8 — GitHub Actions Workflows ✅ COMPLETE
 
 **Goal:** Production automation.
 
-- [ ] `.github/workflows/daily.yml`
-- [ ] `.github/workflows/monitoring.yml`
-- [ ] `.github/workflows/weekly-report.yml`
-- [ ] `.github/workflows/oss-hunter.yml`
-- [ ] `.github/workflows/security.yml`
-- [ ] `.github/workflows/manual.yml`
-- [ ] Workflow permission lockdown
-- [ ] Pinned action versions
-- [ ] State caching strategy
-- [ ] Secret handling audit
+Implemented:
+- [x] `.github/workflows/daily.yml` — `cron '0 8 * * *'` + dispatch
+- [x] `.github/workflows/monitoring.yml` — `cron '0 */2 * * *'` + dispatch
+- [x] `.github/workflows/weekly-report.yml` — `cron '0 9 * * 1'` + dispatch
+- [x] `.github/workflows/oss-hunter.yml` — `cron '0 10 * * *'` + dispatch
+- [x] `.github/workflows/security.yml` — `cron '0 6 * * *'` + dispatch
+- [x] `.github/workflows/manual.yml` — `workflow_dispatch` only, `choice` job input
+- [x] `src/jobs/pipeline.py` — shared plumbing: config, collection, state, diff
+- [x] `src/jobs/jobs.py` — the six jobs + `register_all_jobs`
+- [x] `src/jobs/__main__.py` — `python -m src.jobs <job>`
+- [x] `src/core/dispatcher.py` — module guard fixed: it no longer exits 0 without running
+- [x] `src/core/__main__.py` — same, plus job registration at the CLI boundary
+- [x] Workflow permission lockdown — every workflow declares explicit read-only scopes
+- [x] Pinned action versions — SHA-pinned with version comments
+- [x] State caching strategy — shared restore prefix, fresh immutable save key
+- [x] Secret handling audit — `GITHUB_TOKEN` / `TELEGRAM_BOT_TOKEN` via Actions Secrets, env only
+- [x] Tests: 288 (job dispatch, CLI exit codes, architecture boundary, workflow validation)
 
-**Verification:** `verify-change` at `security` tier.
+#### Execution Model
+
+```
+GitHub Actions (cron / workflow_dispatch)
+        ↓  python -m src.jobs      (GHOPS_JOB from the environment)
+core/dispatcher.py                   ← routes job name → function
+        ↓
+src/jobs/jobs.py                     ← six thin jobs
+        ↓
+src/jobs/pipeline.py                 ← collect → apply_snapshot → diff_resources → persist
+        ↓
+collectors → core/state → monitors / intelligence / developer
+        ↓
+notifications/telegram.py            ← outbound only
+```
+
+No business logic lives in the job layer. It composes public APIs that Phases 1–7
+already own; anything else would duplicate an existing layer.
+
+#### Jobs
+
+| Job | Collects | Then runs | Writes state |
+|-----|----------|-----------|--------------|
+| `daily` | repos, issues, pulls, releases, workflows | Phase 4 monitors + alert digest | yes |
+| `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
+| `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
+| `oss-hunt` | — | Phase 5 hunter + delivery | no |
+| `security` | security | — | yes |
+| `status` | — | read-only state/config report | no |
+
+#### Failure Semantics
+
+A collector failure is **partial, not fatal**: the failed collector is recorded,
+the other repositories are still collected, and Phase 3 preserves the previous
+valid items. Only config, credential, and state failures are fatal. Delivery
+failures never fail a job — state is already persisted by then, so a Telegram
+outage cannot discard collected data.
+
+An unknown or missing job name exits non-zero. A job invocation can never exit 0
+without having executed a job.
+
+#### State Persistence
+
+The Actions cache is a **rolling snapshot, not a mutable store**. Restore is
+prefix-based (`restore-keys: gh-ops-state-`), so it resolves the most recently
+created snapshot regardless of which workflow wrote it; save uses a fresh
+immutable key (`gh-ops-state-<job>-${{ github.run_id }}-${{ github.run_attempt }}`)
+because cache entries cannot be overwritten. All state-writing workflows share a
+single `concurrency: gh-ops-state` group with `cancel-in-progress: false`, which
+serializes the read-modify-write cycle against the one shared state file.
+
+Documented limitations: 7-day idle eviction, cache growth inside a 10 GB LRU
+pool, concurrency queue depth, and Dependabot alerts potentially being refused by
+`GITHUB_TOKEN`. See §H, "Known Limitations of the Actions Layer".
+
+**Total: 1054/1054 passing**
+
+**Verification:** static workflow validation, architecture boundary tests, and
+subprocess exit-code tests. `ruff` and `mypy` are declared dev dependencies but
+were not installed in the working environment, so those two checks were not run
+and are not claimed to have passed.
 
 ### Phase 9 — Security Hardening
 
@@ -1665,7 +1968,10 @@ prevent delivery to the others.
 3. **Deterministic.** Same input → same output. No randomness, no LLM calls.
 4. **Partial failure is normal.** One bad repo does not kill the run.
 5. **State is JSON.** No external databases in runtime. Repository-backed via Actions cache.
-6. **Workflows are thin.** Logic lives in Python, not YAML.
+6. **Workflows are thin.** Logic lives in Python, not YAML. A workflow's only
+   substantive step is `python -m src.jobs`, and no expression is interpolated
+   into any `run:` step. Actions schedules; `src/jobs/` orchestrates by
+   composing Phase 1–7 public APIs, adding no intelligence of its own.
 7. **Configs are YAML.** Logic lives in Python, not configs.
 8. **Secrets in env vars only.** Never in CLI args, never in logs.
 9. **Every collector is isolated.** Failures propagate as structured errors, not exceptions.
@@ -1674,3 +1980,7 @@ prevent delivery to the others.
 12. **OSS is first-class.** Dedicated workflow, dedicated scoring, dedicated state.
 13. **Scoring is transparent.** Explicit weights, explicit signals, stable tie-breaking.
 14. **No unnecessary dependencies.** Runtime needs: requests + pyyaml + pytest. That's it.
+15. **Dependency direction is one-way.** `core/github → state/events → monitors /
+    intelligence / developer → notifications`, with `src/jobs/` composing them
+    from above. No lower layer imports `src.jobs` except inside a `__main__`
+    guard, which is enforced by test.

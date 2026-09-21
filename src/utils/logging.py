@@ -19,6 +19,10 @@ _SECRET_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]{82}"),  # GitHub fine-grained PAT
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
     re.compile(r"token\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
+    # Telegram bot token: "<bot_id>:<secret>" as it appears in an API URL
+    re.compile(r"bot\d{6,}:[A-Za-z0-9_\-]{30,}"),
+    # Telegram bot token, bare form (33+ secret characters after the colon)
+    re.compile(r"\d{9,12}:[A-Za-z0-9_\-]{33,}"),
 ]
 
 _REDACTION = "[REDACTED]"

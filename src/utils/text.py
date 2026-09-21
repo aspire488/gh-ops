@@ -8,8 +8,12 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
-# Telegram MarkdownV2 special characters that need escaping
-_TELEGRAM_MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
+# Telegram MarkdownV2 special characters that need escaping.
+#
+# The backslash is the escape character itself and MUST also be escaped,
+# otherwise untrusted text containing a backslash produces an invalid escape
+# sequence and Telegram rejects the entire message with a 400 error.
+_TELEGRAM_MDV2_SPECIAL = "_*[]()~`>#+-=|{}.!\\"
 
 # Pattern to match characters that need escaping in MarkdownV2
 _TELEGRAM_ESCAPE_RE = re.compile(f"([{re.escape(_TELEGRAM_MDV2_SPECIAL)}])")

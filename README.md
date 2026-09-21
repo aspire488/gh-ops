@@ -15,9 +15,9 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 4 — Repository Monitoring | ✅ Complete | 388/388 tests |
 | Phase 5 — OSS Intelligence | ✅ Complete | 494/494 tests |
 | Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
-| Phase 7 — Notifications | Pending | — |
+| Phase 7 — Telegram Notifications | ✅ Complete | 734/734 tests |
 
-**Total: 569/569 tests passing.**
+**Total: 734/734 tests passing.**
 
 ## Architecture
 
@@ -231,7 +231,7 @@ statistics.py   — descriptive counts and breakdowns
         ↓
 reports.py      — structured DeveloperReport
         ↓
-Phase 7 notifications (not implemented)
+Phase 7 Telegram delivery (escaped, split, per-chat isolation)
 ```
 
 ### Activity Model
@@ -308,6 +308,95 @@ to make bucket boundaries reproducible.
   `pr_opened`, because that close transition was never observed
 - A report describes one period from one snapshot; no history or trends
 
+## Telegram Notifications (Phase 7)
+
+`src/notifications/telegram.py` delivers already-computed results to Telegram.
+It is a **thin outbound delivery layer**: it does not query GitHub, contains no
+intelligence or scoring, does not mutate state, performs no GitHub writes,
+accepts no inbound control, and calls no LLM/agent/MCP/UEA runtime.
+
+### Pipeline
+
+```
+structured results (MonitorResult / Opportunity / DeveloperReport)
+        ↓
+formatters         — escaped MarkdownV2, split to fit Telegram's limit
+        ↓
+TelegramTransport  — finite timeout, bounded retries, 429 / Retry-After
+        ↓
+Telegram Bot API   — https://api.telegram.org (fixed module constant)
+```
+
+### Bot Token
+
+- Read from `TELEGRAM_BOT_TOKEN` **only** — never from config, CLI arguments, or state
+- Config that sets `bot_token_ref` to any other variable is rejected at load time
+- The token is never logged, never placed in errors or error context, and never persisted
+  - The token is embedded in the request URL, so raw URLs are excluded from logs and errors
+  - Raw exception text is excluded too, since third-party exceptions can embed the URL
+- `logging.py` additionally redacts Telegram token patterns as defence-in-depth
+
+### Configuration (`config/telegram.yml`)
+
+```yaml
+telegram:
+  enabled: false
+  bot_token_ref: "TELEGRAM_BOT_TOKEN"
+  chat_ids:
+    - chat_id: 123456789
+      topics: [alerts, oss_opportunities]
+    - chat_id: 987654321      # no topics = receives everything
+  message:
+    max_length: 4096
+    parse_mode: "MarkdownV2"
+    retry_attempts: 3
+    retry_delay_seconds: 5
+    timeout_seconds: 10
+```
+
+### Topics
+
+| Topic | Entry point |
+|-------|-------------|
+| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
+| `oss_opportunities` | `notify_oss_opportunities` |
+| `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
+
+### Delivery Behavior
+
+| Condition | Behavior |
+|-----------|----------|
+| 2xx `ok: true` | delivered |
+| 2xx `ok: false` | structured error |
+| 400 / 404 | structured error, no retry |
+| 401 / 403 | structured error, no retry |
+| 429 | retried after `Retry-After`, else exponential backoff |
+| 5xx | retried with exponential backoff |
+| timeout / network | retried, then structured error |
+
+- Attempts are bounded at `retry_attempts + 1`; every request has a finite timeout
+- Delivery is a safe no-op when disabled, when no chat matches the topic, or when
+  no token is set — it never raises for a delivery problem
+- Failures are isolated per chat: one failing chat does not block the others, and
+  a failing chat receives no further messages in that run
+
+### Escaping and Splitting
+
+- All text — including the message title — goes through `escape_markdown_v2`, so
+  a hostile repository name or issue title cannot open or close a MarkdownV2 entity
+- Blocks are escaped independently and then packed, so packing never splits an
+  escape sequence; oversized blocks are split on their escaped form with a
+  dangling backslash carried onto the next chunk
+- Every message is at most `max_length` characters, even when escaping doubles the text
+- Output is byte-identical for identical input
+
+### Limitations
+
+- Outbound only: no commands, no polling, no webhooks
+- URLs are sent as escaped plain text rather than inline links
+- Digest scheduling (daily/weekly jobs) belongs to Phase 8; this phase provides
+  formatting and delivery only
+
 ## Local Testing
 
 All tests use mocked HTTP responses — no live GitHub contact:
@@ -343,7 +432,7 @@ python -m pytest tests/core/ -v
 | `monitors/__init__.py` | 16 | Registry, event dispatch, summary |
 | `monitors/monitor.py` | 14 | MonitorResult model, classification, properties |
 | `monitors/*` (properties) | 5 | Property tests for MonitorResult invariants |
-| `utils/text.py` | 20 | Markdown escaping, split, truncate |
+| `utils/text.py` | 23 | MarkdownV2 escaping, split, truncate |
 | `utils/time.py` | 16 | Timestamps, relative time |
 | `intelligence/oss/models.py` | 9 | Opportunity, ScoreBreakdown, from_search_result |
 | `intelligence/oss/queries.py` | 16 | Query generation, dedup, config, custom queries |
@@ -354,7 +443,11 @@ python -m pytest tests/core/ -v
 | `developer/activity.py` | 38 | Activity extraction, filtering, dedup, data quality |
 | `developer/statistics.py` | 21 | Counts, repo breakdown, periods, active days |
 | `developer/reports.py` | 16 | Report generation, periods, formatting |
-| **Total** | **569** | |
+| `notifications/telegram.py` (config) | 42 | Token resolution, config validation, chat routing |
+| `notifications/telegram.py` (transport) | 40 | Send, 4xx/5xx, retries, Retry-After, token safety |
+| `notifications/telegram.py` (formatters) | 47 | Escaping, splitting, long messages, determinism |
+| `notifications/telegram.py` (notifier) | 33 | Routing, failure isolation, safe skipping |
+| **Total** | **734** | |
 
 ## Project Structure
 
@@ -375,11 +468,11 @@ gh-ops/
 │   │   ├── ci.py       # CI/workflow failure/recovery detection
 │   │   ├── release.py  # Release event monitoring
 │   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
-│   ├── notifications/  # Telegram adapter
+│   ├── notifications/  # Outbound Telegram delivery (Phase 7)
 │   └── utils/          # Logging, text, time helpers
 ├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml)
 ├── data/               # Runtime state (gitignored)
-├── tests/              # Test suite (569 tests)
+├── tests/              # Test suite (734 tests)
 └── scripts/            # Local development scripts
 ```
 

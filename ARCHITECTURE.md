@@ -152,13 +152,13 @@ gh-ops/
 │   │   └── endpoint.py           # Generic URL/API health checks
 │   │
 │   ├── notifications/
-│   │   ├── __init__.py
-│   │   └── telegram.py           # Telegram Bot API adapter
+│   │   ├── __init__.py           # Public API
+│   │   └── telegram.py           # Outbound Telegram Bot API adapter
 │   │
 │   └── utils/
 │       ├── __init__.py
 │       ├── logging.py            # Structured collector logging
-│       ├── text.py               # Text escaping, formatting, splitting
+│       ├── text.py               # MarkdownV2 escaping, splitting, formatting
 │       └── time.py               # Timezone, date helpers
 │
 ├── config/
@@ -206,7 +206,11 @@ gh-ops/
 │   │   └── test_release.py
 │   └── notifications/
 │       ├── __init__.py
-│       └── test_telegram.py
+│       ├── _fakes.py             # Mocked Telegram HTTP test doubles
+│       ├── test_telegram_config.py
+│       ├── test_telegram_transport.py
+│       ├── test_telegram_formatters.py
+│       └── test_telegram_notifier.py
 │
 ├── scripts/
 │   └── run_local.py              # Local dev runner
@@ -756,6 +760,26 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 3. Secrets in env vars only, never CLI args.
 4. `.env` files gitignored.
 
+### Preventing Telegram Token Leakage
+
+1. The bot token is read from `TELEGRAM_BOT_TOKEN` only — never from config
+   files, CLI arguments, or state. A config that points at any other env var is
+   rejected at load time rather than silently ignored.
+2. The token is embedded in the API request URL, so raw request URLs are never
+   logged and never attached to errors or error context.
+3. Raw third-party exception text is never interpolated into our error messages,
+   because those strings can embed the URL. Only the exception type name is used.
+4. `logging.py` additionally redacts Telegram bot token patterns as
+   defence-in-depth.
+5. `TelegramError` carries no token, no URL, and no raw exception text.
+
+### Preventing Telegram Inbound Control
+
+1. Outbound only. There is no `getUpdates` polling and no webhook registration.
+2. No command parsing: inbound messages are never read.
+3. The API base URL is a module constant, so delivery cannot be redirected to an
+   arbitrary host, and HTTPS is enforced by that constant.
+
 ### Preventing Workflow Injection
 
 1. No `${{ github.event.* }}` in `run:` steps.
@@ -1050,7 +1074,14 @@ src/developer/reports.py
     → (emits) DeveloperReport for Phase 7 notification formatting
 
 src/notifications/telegram.py
-    → (calls) Telegram Bot API
+    → (uses) core/errors.py, core/monitor.py, core/rate_limit.py,
+             developer/reports.py, utils/logging.py, utils/text.py, requests
+    → (calls) Telegram Bot API — https://api.telegram.org (fixed module constant)
+    → (never) github/client.py, or any GitHub HTTP call of any kind
+    → (never) imports src/monitors/* or src/intelligence/*: monitor and OSS
+              results are consumed structurally, precisely so that the delivery
+              layer never pulls in the GitHub client
+    → no Phase 1–6 module imports notifications (no reverse dependency)
 ```
 
 ---
@@ -1303,7 +1334,8 @@ Critical invariant: A failed collector MUST NOT cause valid previous state to di
 - Phase 4 tests: 97 (includes 5 property tests)
 - Phase 5 tests: 106
 - Phase 6 tests: 75
-- **Total: 569/569 passing**
+- Phase 7 tests: 165
+- **Total: 734/734 passing**
 - Security audit: 0 FAIL / 0 WARN
 
 **Verification:** `verify-change` at `standard` tier.
@@ -1468,17 +1500,111 @@ produced twice (key: activity_type, item_id, timestamp).
 
 **Verification:** `verify-change` at `standard` tier.
 
-### Phase 7 — Telegram Integration
+### Phase 7 — Telegram Integration ✅ COMPLETE
 
-**Goal:** Complete notification layer.
+**Goal:** Outbound notification delivery.
 
-- [ ] `src/notifications/telegram.py` — Full adapter (split, retry, escape)
-- [ ] Daily digest formatting
-- [ ] Weekly report formatting
-- [ ] Alert formatting
-- [ ] Security notification formatting
-- [ ] OSS opportunity formatting
-- [ ] Tests
+Implemented:
+- [x] `src/notifications/telegram.py` — Config + token resolution, formatters, `TelegramTransport`, `TelegramNotifier`
+- [x] `src/notifications/__init__.py` — Public API
+- [x] MarkdownV2 escaping and message splitting, reusing `utils/text.py`
+- [x] Monitor alert, OSS opportunity, and developer report formatting
+- [x] Bounded retries, 429 / `Retry-After`, structured errors, per-chat failure isolation
+- [x] `config/telegram.yml` — enabled flag, chat IDs with topic subscriptions, message limits, timeout
+- [x] Tests: 165 (config, transport, formatters, notifier, failure isolation, secret safety)
+- [ ] Daily / weekly digest *scheduling* — deferred to Phase 8 (workflow layer)
+
+#### Delivery Architecture
+
+```
+structured results (MonitorResult / Opportunity / DeveloperReport)
+        ↓
+formatters          — deterministic, escaped MarkdownV2, split to fit
+        ↓
+TelegramTransport   — finite timeout, bounded retries, 429 / Retry-After
+        ↓
+Telegram Bot API    — https://api.telegram.org (fixed module constant)
+```
+
+`src/notifications/telegram.py` is the single Telegram HTTP exit point, in the
+same spirit as `github/client.py` being the single GitHub exit point. It does
+not reuse the GitHub client: that client is GET-only and GitHub-specific, while
+Telegram delivery requires POST.
+
+Telegram is a THIN DELIVERY LAYER. It does not query GitHub, contains no
+intelligence or scoring, does not mutate state, performs no GitHub writes,
+accepts no inbound control, and calls no LLM, agent, MCP, or UEA runtime.
+
+#### Topics and Routing
+
+| Topic | Produced by |
+|-------|-------------|
+| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
+| `oss_opportunities` | `notify_oss_opportunities` — ranked opportunities |
+| `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
+
+A chat target with no `topics` receives every topic. Chats are served in
+configured order.
+
+#### Configuration and Token Handling
+
+- The bot token comes from `TELEGRAM_BOT_TOKEN` ONLY. `bot_token_ref` set to any
+  other value raises `ConfigError` instead of being silently ignored.
+- Telegram config contains no secrets and its serialization has no token field.
+- `max_length` is clamped to Telegram's 4096-character limit; non-positive
+  timeouts, negative retry counts, and malformed `chat_ids` raise `ConfigError`.
+- Delivery is a safe no-op when disabled, when no chat matches the topic, or
+  when no token is configured — none of which raise or perform HTTP.
+
+#### Transport Behavior
+
+| Condition | Behavior |
+|-----------|----------|
+| 2xx with `ok: true` | parsed body returned |
+| 2xx with `ok: false` | `TELEGRAM_DELIVERY_FAILED` |
+| 400 / 404 | `TELEGRAM_DELIVERY_FAILED`, not retried |
+| 401 / 403 | `TELEGRAM_DELIVERY_FAILED`, `HIGH` severity, not retried |
+| 429 | retried after `Retry-After` (header, else body `parameters.retry_after`), clamped to `max_retry_delay`; exhausted to `TELEGRAM_RATE_LIMITED` |
+| 5xx | retried with exponential backoff, then `TELEGRAM_DELIVERY_FAILED` |
+| timeout / network error | retried, then `TELEGRAM_DELIVERY_FAILED` |
+
+Attempts are bounded at `retry_attempts + 1`, each with a finite timeout.
+Backoff reuses `core/rate_limit.py` (`calculate_backoff`, `parse_retry_after`).
+
+#### Formatting, Escaping, and Splitting
+
+- Every character of text placed in a message is escaped with
+  `escape_markdown_v2` — including the title. The bold title is the only
+  unescaped markup, so a hostile repository name or issue title cannot open or
+  close an entity.
+- Blocks are escaped independently and then greedily packed, so packing can
+  never split an escape sequence. A block that alone exceeds the limit is split
+  on its escaped form, and a backslash left dangling at a cut is carried onto the
+  next chunk.
+- Every returned message is at most `max_length` characters, even when escaping
+  doubles the text length.
+- Output depends only on the input, never on the clock: the same input always
+  produces byte-identical messages.
+
+#### Failure Isolation
+
+Delivery never raises for delivery or configuration problems. Failures are
+reported through `NotificationResult` (`sent`, `skipped`, `skip_reason`,
+`attempts`, `errors`, `ok`) so a failed notification cannot break a collection
+run. A failure for one chat stops further messages to that chat but does not
+prevent delivery to the others.
+
+#### Limitations
+
+- No inbound handling: no commands, no polling, no webhooks.
+- URLs are transmitted as escaped plain text rather than inline links, keeping
+  the escaping surface to a single audited utility.
+- No parse-mode fallback: unescaped-markup problems would surface as a 400, but
+  the escaping rules above are designed to make that unreachable.
+- Digest scheduling and composition (daily/weekly jobs) belongs to Phase 8; this
+  phase only provides formatting and delivery.
+
+**Total: 734/734 passing**
 
 **Verification:** `verify-change` at `standard` tier.
 

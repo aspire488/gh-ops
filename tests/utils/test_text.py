@@ -26,6 +26,19 @@ class TestEscapeMarkdownV2:
     def test_empty_string(self):
         assert escape_markdown_v2("") == ""
 
+    def test_escapes_the_escape_character(self):
+        # The backslash is the escape character itself: unescaped, it would
+        # swallow the next character and produce invalid MarkdownV2.
+        assert escape_markdown_v2("a\\b") == "a\\\\b"
+
+    def test_trailing_backslash_is_escaped(self):
+        result = escape_markdown_v2("trailing\\")
+        assert result == "trailing\\\\"
+        assert len(result) - len(result.rstrip("\\")) == 2
+
+    def test_backslash_before_special_char_keeps_both_escaped(self):
+        assert escape_markdown_v2("\\_") == "\\\\\\_"
+
 
 class TestSplitMessage:
     def test_short_message(self):

@@ -1,17 +1,20 @@
 telegram:
   enabled: false
+  # The bot token is read from this environment variable ONLY.
+  # Never put the token in this file.
   bot_token_ref: "TELEGRAM_BOT_TOKEN"
   chat_ids: []
   # Example:
   # chat_ids:
   #   - chat_id: 123456789
   #     topics:
-  #       - daily_digest
+  #       - alerts
   #       - oss_opportunities
-  #       - security_alerts
   #   - chat_id: 987654321
   #     topics:
-  #       - weekly_report
+  #       - developer_report
+  # A chat with no `topics` receives every topic.
+  # Topics: alerts, oss_opportunities, developer_report
 
   message:
     max_length: 4096
@@ -19,3 +22,4 @@ telegram:
     split_separator: "\n\n"
     retry_attempts: 3
     retry_delay_seconds: 5
+    timeout_seconds: 10

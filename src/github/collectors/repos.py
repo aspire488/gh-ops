@@ -1,7 +1,7 @@
 """Repository collector. Fetches repository metadata."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from src.github.client import GitHubClient
 from src.github.models import Repository

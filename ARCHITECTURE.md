@@ -1049,7 +1049,7 @@ src/notifications/telegram.py
 
 ## M. Implementation Phases
 
-### Phase 0 — Architecture + Migration (current)
+### Phase 0 — Architecture + Migration (COMPLETE)
 
 - [x] Inspect existing project
 - [x] Copy to gh-ops/
@@ -1060,44 +1060,129 @@ src/notifications/telegram.py
 - [x] Classify UEA capabilities
 - [x] Identify architecture corrections
 - [x] Produce ARCHITECTURE.md v2 (this document)
-- [ ] Delete old oss-command-center/
-- [ ] Initial commit
+- [x] Delete old skeleton files (config.yml, data/*.json, src/collectors/, src/hunters/, src/telegram/)
+- [x] Initial commit (e2286eb)
 
-### Phase 1 — Core Runtime
+### Phase 1 — Core Runtime (COMPLETE)
 
 **Goal:** Foundation that everything else depends on.
 
-- [ ] `src/core/config.py` — YAML config loading + validation
-- [ ] `src/core/state.py` — JSON state persistence (atomic writes)
-- [ ] `src/core/errors.py` — Structured error types
-- [ ] `src/core/rate_limit.py` — Rate-limit header parsing + backoff
-- [ ] `src/core/events.py` — Event detection (diff state)
-- [ ] `src/core/dispatcher.py` — Lightweight job dispatcher
-- [ ] `src/utils/logging.py` — Structured log output
-- [ ] `src/utils/text.py` — Text formatting utilities
-- [ ] `src/utils/time.py` — Timezone/date helpers
-- [ ] `config/settings.yml` — Global settings
-- [ ] Tests for all core modules
+**Status:** Complete. 112/112 tests passing.
+
+- [x] `src/core/config.py` — YAML config loading + validation
+- [x] `src/core/state.py` — JSON state persistence (atomic writes)
+- [x] `src/core/errors.py` — Structured error types
+- [x] `src/core/rate_limit.py` — Rate-limit header parsing + backoff
+- [x] `src/core/events.py` — Event detection (diff state)
+- [x] `src/core/dispatcher.py` — Lightweight job dispatcher
+- [x] `src/utils/logging.py` — Structured log output
+- [x] `src/utils/text.py` — Text formatting utilities
+- [x] `src/utils/time.py` — Timezone/date helpers
+- [x] `config/settings.yml` — Global settings
+- [x] Tests for all core modules (112 tests)
 
 **Verification:** `verify-change` at `standard` tier.
 
-### Phase 2 — GitHub API Client
+### Phase 2 — GitHub API Client (COMPLETE)
 
 **Goal:** Central, secure, resilient API layer.
 
-- [ ] `src/github/auth.py` — Token resolution
-- [ ] `src/github/client.py` — Central HTTP client with retry, backoff, ETag, timeout, GET-only enforcement
-- [ ] `src/github/models.py` — Dataclasses for API responses
-- [ ] `src/github/collectors/repos.py` — Repository metadata collector
-- [ ] `src/github/collectors/issues.py` — Issue collector + search
-- [ ] `src/github/collectors/pulls.py` — PR collector
-- [ ] `src/github/collectors/releases.py` — Release collector
-- [ ] `src/github/collectors/workflows.py` — Workflow run collector
-- [ ] `src/github/collectors/user.py` — Authenticated user collector
-- [ ] `config/repositories.yml` — Monitored repository list
-- [ ] Tests with mock HTTP responses
+**Status:** Complete. 185/185 tests passing. Security audit: 0 FAIL / 0 WARN.
 
-**Verification:** `verify-change` at `strict` tier (shared code).
+#### Implementation Summary
+
+- [x] `src/github/auth.py` — Token resolution from `GITHUB_TOKEN` / `GH_TOKEN` env vars
+- [x] `src/github/client.py` — Central HTTP client with retry, backoff, ETag, timeout, GET-only enforcement
+- [x] `src/github/models.py` — 8 frozen dataclasses for API responses
+- [x] `src/github/collectors/repos.py` — Repository metadata collector
+- [x] `src/github/collectors/issues.py` — Issue collector + search
+- [x] `src/github/collectors/pulls.py` — PR collector
+- [x] `src/github/collectors/releases.py` — Release collector
+- [x] `src/github/collectors/workflows.py` — Workflow run collector
+- [x] `src/github/collectors/security.py` — Dependabot/code-scanning alert collector
+- [x] `src/github/collectors/user.py` — Authenticated user collector
+- [x] `config/repositories.yml` — Monitored repository list (empty, ready for config)
+- [x] Tests with mock HTTP responses (73 Phase 2 tests)
+
+#### auth.py Responsibilities
+
+- Resolves token from `GITHUB_TOKEN` (preferred) or `GH_TOKEN` (fallback)
+- `AuthConfig` frozen dataclass with `token`, `token_source`, `has_token`, `auth_headers()`, `to_headers()`
+- Safe `__repr__` — shows only `token_source`, never the token value
+- `validate_token_format()` — checks prefix/length, warns on unknown formats
+- Raises `GhOpsError` (CRITICAL) if no token found
+- Token held only in memory, never serialized or logged
+
+#### client.py Responsibilities
+
+- **Single HTTP exit point** — only file that imports `requests`
+- GET-only enforcement via `WriteDeniedError` in `execute()`
+- `get()` — single-page GET request
+- `get_paginated()` — multi-page GET with Link header following
+- `_do_request()` — internal method with retry logic (bypasses GET-only check; pagination is inherently GET)
+- Retry: exponential backoff `min(1.0 * 2^attempt + jitter, 30.0)`, max 3 retries
+- Rate limit tracking via `RateLimitTracker.update_from_headers()`
+- ETag/304: returns `PaginatedResult(not_modified=True)` on 304
+- Error mapping: 401→`API_AUTH_FAILED`, 403→`API_FORBIDDEN`, 404→`API_NOT_FOUND`, 429→`API_RATE_LIMITED`, 5xx→`INTERNAL_ERROR`
+- Context manager support (`with GitHubClient() as client:`)
+
+#### models.py Normalized Models
+
+8 frozen dataclasses with `from_api()` classmethods and `to_dict()` serialization:
+
+| Model | Key Fields |
+|-------|------------|
+| `Repository` | `id`, `full_name`, `owner`, `name`, `stars`, `forks`, `language`, `topics`, `license_key` |
+| `Issue` | `id`, `number`, `title`, `state`, `labels`, `user`, `comments`, `repo_full_name` |
+| `PullRequest` | `id`, `number`, `title`, `state`, `head_branch`, `base_branch`, `merged` |
+| `Release` | `id`, `tag_name`, `name`, `author`, `assets_count` |
+| `WorkflowRun` | `id`, `name`, `status`, `conclusion`, `is_success`, `is_failure` |
+| `SecurityAlert` | `id`, `package_name`, `severity`, `summary`, `state` |
+| `User` | `id`, `login`, `name`, `public_repos`, `followers` |
+| `PaginatedResult` | `items`, `total_count`, `has_next`, `etag`, `not_modified` |
+
+#### Collector Boundaries
+
+- **No `requests` import** — collectors use only `GitHubClient` and models
+- **No credential access** — collectors never see the token
+- **No HTTP logic** — pagination, retries, rate limits are in `client.py`
+- **Thin wrappers** — each function calls `client.get()` or `client.get_paginated()` and returns models
+- **Deterministic parsing** — `Model.from_api()` handles all field extraction
+
+#### Pagination / ETag / Rate-Limit Behavior
+
+- Pagination follows `Link` header `rel="next"` references, bounded by `max_pages`
+- ETag passed via `If-None-Match` header; 304 returns `not_modified=True`
+- Rate limit headers (`X-RateLimit-Remaining/Limit/Reset`) update tracker on every response
+- `Retry-After` header honored on 429; integer and HTTP-date formats supported
+- `on_rate_limit` callback invoked when rate limit state changes
+
+#### Authentication Boundary
+
+- Token resolved at `GitHubClient.__init__()` time
+- Token injected into `requests.Session` headers once
+- Collectors receive `GitHubClient` instance, not the token
+- No collector can access the raw token
+- `auth_headers()` returns `Authorization: token {token}` header dict
+
+#### Security Invariants
+
+1. **Single HTTP exit point** — `client.py` is the only file importing `requests`
+2. **GET-only enforcement** — `execute()` raises `WriteDeniedError` for non-GET
+3. **No credential logging** — `AuthConfig.__repr__` shows only source variable name
+4. **No credential serialization** — token held in memory only
+5. **No collector HTTP access** — collectors call client methods, not `requests`
+6. **Structured errors** — no raw exception propagation, all errors typed
+7. **SSRF protection** — base URL hardcoded to `https://api.github.com`, collectors use relative endpoints
+
+#### Test Results
+
+- Phase 2 tests: 73 (auth: 15, client: 16, models: 19, collectors: 23)
+- Phase 1 tests: 112
+- **Total: 185/185 passing**
+- Security audit: 0 FAIL / 0 WARN
+
+**Verification:** `verify-change` at `strict` tier (shared code). Security audit passed.
 
 ### Phase 3 — State & Event Engine
 

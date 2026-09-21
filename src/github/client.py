@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 import random
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import requests
 

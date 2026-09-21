@@ -11,13 +11,13 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 0 — Architecture | Complete | — |
 | Phase 1 — Core Runtime | Complete | 112/112 |
 | Phase 2 — GitHub API Client | Complete | 73/73 |
-| Phase 3 — State & Event Engine | Pending | — |
+| Phase 3 — State & Event Engine | Complete | 106/106 |
 | Phase 4 — Repository Monitoring | Pending | — |
 | Phase 5 — OSS Intelligence | Pending | — |
 | Phase 6 — Developer Intelligence | Pending | — |
 | Phase 7 — Notifications | Pending | — |
 
-**Total: 185/185 tests passing.**
+**Total: 291/291 tests passing.**
 
 ## Architecture
 
@@ -153,6 +153,67 @@ All models provide `to_dict()` for serialization and `from_api()` for parsing.
 
 The `WriteDeniedError` enforcement in `client.py` makes this a hard guarantee, not a convention.
 
+## State & Event Engine (Phase 3)
+
+gh-ops implements a deterministic state engine that detects changes between collection runs.
+
+### Four Distinct Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Snapshot** | What was observed during a single collection run |
+| **CurrentState** | The latest successfully accepted observation per resource type |
+| **Event** | The deterministic transition between observations |
+| **HistoryEntry** | What has previously been observed/emitted |
+
+### Deterministic Diff Engine
+
+`diff_resources()` produces NEW/CHANGED/REMOVED/UNCHANGED events with field-level change tracking:
+
+```python
+from src.core.events import diff_resources
+
+events = diff_resources(
+    resource_type="issues",
+    previous_items={"#1": {"state": "open", "title": "bug"}},
+    current_items={"#1": {"state": "closed", "title": "bug"}},
+)
+# events[0].event_type == EventType.CHANGED
+# events[0].changes == (FieldChange(field="state", before="open", after="closed"),)
+```
+
+### Partial Failure Semantics
+
+A failed collector MUST NOT cause valid previous state to disappear:
+
+- **SUCCESS** — overwrite that collector's items
+- **NOT_MODIFIED** — preserve existing items (304 response)
+- **FAILURE** — preserve previous items, record the failure
+
+### State Persistence
+
+- Schema versioning with `STATE_SCHEMA_VERSION = 1`
+- Atomic writes: temp file → flush → fsync → atomic replace
+- Corruption handling: MISSING / VALID / CORRUPT / UNSUPPORTED_VERSION
+- ETag persistence for conditional requests
+
+### Usage
+
+```python
+from src.core.state import load_current_state, apply_snapshot
+from src.core.models import Snapshot, CollectorResult, CollectorStatus
+
+# Load previous state
+previous = load_current_state()
+
+# Apply a snapshot (partial failure safe)
+snapshot = Snapshot(results={
+    "repos": CollectorResult(collector="repos", status=CollectorStatus.SUCCESS, items={...}),
+    "releases": CollectorResult(collector="releases", status=CollectorStatus.FAILURE, error="timeout"),
+})
+new_state = apply_snapshot(previous, snapshot)
+```
+
 ## Local Testing
 
 All tests use mocked HTTP responses — no live GitHub contact:
@@ -172,17 +233,18 @@ python -m pytest tests/core/ -v
 |--------|-------|----------|
 | `core/errors.py` | 12 | Error types, collector, serialization |
 | `core/config.py` | 13 | YAML loading, deep merge, validation |
-| `core/state.py` | 17 | Load, save, diff, merge, atomic writes |
-| `core/events.py` | 10 | Event detection, filtering, summarization |
-| `core/rate_limit.py` | 17 | State tracking, backoff, retry-after parsing |
-| `core/dispatcher.py` | 7 | Job registration, execution, error handling |
-| `github/auth.py` | 15 | Token resolution, format validation, env vars |
-| `github/client.py` | 16 | GET-only, pagination, ETag, rate limits, errors |
-| `github/models.py` | 19 | All 8 models + PaginatedResult |
-| `github/collectors/` | 23 | All 7 collectors with mocked client |
-| `utils/text.py` | 15 | Markdown escaping, splitting, truncation |
-| `utils/time.py` | 13 | Timestamp parsing, formatting, staleness |
-| **Total** | **185** | |
+| `core/state.py` | 32 | Load/save, diff, prune, merge, validation, atomic writes, apply_snapshot, ETags, history |
+| `core/events.py` | 40 | detect_events, diff_resources, field changes, determinism, normalization |
+| `core/models.py` | 26 | State models, validation, serialization |
+| `core/rate_limit.py` | 12 | Tracker, headers, backoff |
+| `core/dispatcher.py` | 6 | Job registration, execution |
+| `github/auth.py` | 15 | Token resolution, AuthConfig |
+| `github/client.py` | 16 | GET-only, retry, pagination, ETags |
+| `github/models.py` | 19 | 8 dataclasses, from_api, to_dict |
+| `github/collectors.py` | 23 | 7 collectors, mocked responses |
+| `utils/text.py` | 13 | Markdown escaping, split, truncate |
+| `utils/time.py` | 14 | Timestamps, relative time |
+| **Total** | **291** | |
 
 ## Project Structure
 

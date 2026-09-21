@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from src.utils.time import parse_github_timestamp
 

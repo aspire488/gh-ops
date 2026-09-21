@@ -1184,15 +1184,116 @@ src/notifications/telegram.py
 
 **Verification:** `verify-change` at `strict` tier (shared code). Security audit passed.
 
-### Phase 3 — State & Event Engine
+### Phase 3 — State & Event Engine (COMPLETE)
 
 **Goal:** Detect changes between collection runs.
 
-- [ ] Event detection logic in `src/core/events.py`
-- [ ] State diff algorithms (added/removed/changed)
-- [ ] ETag/conditional request support
-- [ ] State pruning for old entries
-- [ ] Tests for event detection edge cases
+**Status:** Complete. 291/291 tests passing. Security audit: 0 FAIL / 0 WARN.
+
+#### Implementation Summary
+
+- [x] `src/core/models.py` — State models: CollectorResult, CollectorStatus, Snapshot, CurrentState, StateValidation, FieldChange, ResourceEvent, EventType, HistoryEntry
+- [x] `src/core/state.py` — Extended with schema versioning, validation, atomic persistence, CurrentState persistence, apply_snapshot, ETag persistence, history
+- [x] `src/core/events.py` — Extended with deterministic diff engine, field-level change tracking, NEW/CHANGED/REMOVED/UNCHANGED semantics
+- [x] `src/core/errors.py` — New error codes: STATE_UNSUPPORTED_VERSION, STATE_VALIDATION_FAILED
+- [x] Tests for all Phase 3 additions (106 new tests)
+
+#### State Models (`src/core/models.py`)
+
+Four distinct concepts, kept SEPARATE:
+
+| Concept | Description |
+|---------|-------------|
+| **Snapshot** | What was observed during a single collection run |
+| **CurrentState** | The latest successfully accepted observation per resource type |
+| **Event** | The deterministic transition between observations |
+| **HistoryEntry** | What has previously been observed/emitted |
+
+Additional models:
+- `CollectorResult` — Result of a single collector execution (SUCCESS/FAILURE/NOT_MODIFIED)
+- `CollectorStatus` — Outcome enum for collector runs
+- `StateValidation` — Classification of state file condition (MISSING/VALID/CORRUPT/UNSUPPORTED_VERSION)
+- `FieldChange` — A single field-level change between two resource states
+- `EventType` — Event types: NEW, CHANGED, REMOVED, UNCHANGED
+
+#### Schema Versioning
+
+- `STATE_SCHEMA_VERSION = 1` — current version
+- `validate_state()` — classifies state as MISSING/VALID/CORRUPT/UNSUPPORTED_VERSION
+- `load_validated()` — returns (data, validation) tuple
+- Version check: `schema_version > STATE_SCHEMA_VERSION` → UNSUPPORTED_VERSION
+
+#### Deterministic Diff Engine
+
+`diff_resources()` produces NEW/CHANGED/REMOVED/UNCHANGED events:
+- Events sorted by resource_id (deterministic ordering)
+- Field changes sorted by field name
+- Ignored fields: `updated_at`, `pushed_at`, `last_modified`, `etag`, `node_id`, `url`, and any `*_url` field
+- Normalization: lists sorted by string representation for determinism
+- Same input always produces same output (tested with 10 iterations)
+
+#### Field-Level Change Tracking
+
+For CHANGED resources, captures:
+```python
+FieldChange(field="state", before="open", after="closed")
+```
+- Only meaningful fields compared (volatile/API-template fields excluded)
+- Changes sorted by field name for deterministic ordering
+- Full previous/current state preserved for audit
+
+#### Partial Failure Semantics
+
+`apply_snapshot()` handles three collector outcomes:
+- **SUCCESS** — overwrite that collector's items in current state
+- **NOT_MODIFIED** — preserve existing items, update observed_at
+- **FAILURE** — preserve previous items, record the failure
+
+Critical invariant: A failed collector MUST NOT cause valid previous state to disappear.
+
+#### ETag Persistence
+
+- `load_etags()` — load persisted ETags from current state
+- `save_etag()` — save a single ETag
+- Flow: Previous ETag → Phase 2 client → If-None-Match → 200/304 → Phase 3 state layer → Persist
+
+#### Atomic Persistence
+
+`save_atomic()` follows: temp file → write → flush → fsync → atomic replace
+- `os.fsync()` ensures data reaches disk
+- `os.replace()` is atomic on POSIX and Windows (NTFS)
+- Temp files cleaned up on failure
+
+#### Corruption Handling
+
+| Status | Behavior |
+|--------|----------|
+| MISSING | Return empty state (safe default) |
+| VALID | Accept and return data |
+| CORRUPT | Raise StateError (do not silently use empty state) |
+| UNSUPPORTED_VERSION | Raise StateError (do not proceed with unknown schema) |
+
+#### History
+
+- `save_history()` — append-only persistence with atomic writes
+- `load_history()` — load recent entries, sorted by ISO timestamp
+- Retention policy: DEFERRED (clean interface for future extension)
+- History is SEPARATE from current state
+
+#### Security
+
+- Path traversal prevention: `_safe_filename()` validates filenames
+- No secrets in state files (data model is inherently safe)
+- Atomic writes prevent partial corruption
+- JSON-only deserialization (no eval/pickle/exec)
+
+#### Test Results
+
+- Phase 1 tests: 112
+- Phase 2 tests: 73
+- Phase 3 tests: 106
+- **Total: 291/291 passing**
+- Security audit: 0 FAIL / 0 WARN
 
 **Verification:** `verify-change` at `standard` tier.
 

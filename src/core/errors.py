@@ -43,6 +43,8 @@ class ErrorCode(Enum):
     STATE_LOAD_FAILED = "state_load_failed"
     STATE_SAVE_FAILED = "state_save_failed"
     STATE_CORRUPTED = "state_corrupted"
+    STATE_UNSUPPORTED_VERSION = "state_unsupported_version"
+    STATE_VALIDATION_FAILED = "state_validation_failed"
 
     # Collector errors
     COLLECTOR_FAILED = "collector_failed"
@@ -200,12 +202,18 @@ class ConfigError(GhOpsError):
 class StateError(GhOpsError):
     """State persistence error."""
 
-    def __init__(self, message: str, filename: str = "", cause: Exception | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        filename: str = "",
+        code: ErrorCode = ErrorCode.STATE_LOAD_FAILED,
+        cause: Exception | None = None,
+    ) -> None:
         ctx: dict[str, Any] = {}
         if filename:
             ctx["filename"] = filename
         super().__init__(
-            code=ErrorCode.STATE_LOAD_FAILED,
+            code=code,
             message=message,
             module="core.state",
             severity=ErrorSeverity.HIGH,

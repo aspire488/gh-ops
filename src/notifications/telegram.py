@@ -78,6 +78,7 @@ TELEGRAM_DEFAULT_PARSE_MODE = "MarkdownV2"
 TOPIC_ALERTS = "alerts"
 TOPIC_OSS_OPPORTUNITIES = "oss_opportunities"
 TOPIC_DEVELOPER_REPORT = "developer_report"
+TOPIC_RUN_SUMMARY = "run_summary"
 
 #: Telegram error descriptions are untrusted and unbounded; keep errors small.
 _MAX_ERROR_DESCRIPTION = 300
@@ -174,6 +175,7 @@ class TelegramConfig:
     """
 
     enabled: bool = False
+    run_summary: bool = False
     targets: tuple[ChatTarget, ...] = ()
     max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH
     parse_mode: str = TELEGRAM_DEFAULT_PARSE_MODE
@@ -269,6 +271,7 @@ class TelegramConfig:
 
         return cls(
             enabled=bool(section.get("enabled", False)),
+            run_summary=bool(section.get("run_summary", False)),
             targets=_parse_chat_ids(section.get("chat_ids", [])),
             max_length=max_length,
             parse_mode=str(message.get("parse_mode", TELEGRAM_DEFAULT_PARSE_MODE)),
@@ -286,6 +289,7 @@ class TelegramConfig:
         """Deterministic serialization. Contains no secrets."""
         return {
             "enabled": self.enabled,
+            "run_summary": self.run_summary,
             "targets": [t.to_dict() for t in self.targets],
             "max_length": self.max_length,
             "parse_mode": self.parse_mode,
@@ -645,6 +649,20 @@ def format_developer_report(
 
 # ── Transport ────────────────────────────────────────────────────
 
+
+@dataclass(frozen=True)
+class RunSummary:
+    run_type: str
+    repositories_checked: int
+    items_collected: int
+    alerts_generated: int
+    state_persisted: bool
+
+
+def format_run_summary(summary: RunSummary, *, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH, separator: str = "\n\n") -> list[str]:
+    state = "persisted" if summary.state_persisted else "not persisted"
+    body = f"Run type: {summary.run_type}\nRepositories checked: {summary.repositories_checked}\nItems collected: {summary.items_collected}\nAlerts: {summary.alerts_generated}\nState: {state}"
+    return _compose_messages("GH-OPS Monitoring Complete", [body], max_length=max_length, separator=separator)
 
 class TelegramTransport:
     """HTTP transport for the Telegram Bot API.
@@ -1189,3 +1207,11 @@ def notify_developer_report(
         separator=resolved.split_separator,
     )
     return notifier.send(messages, TOPIC_DEVELOPER_REPORT)
+
+
+def notify_run_summary(summary: RunSummary, *, config: Any = None, transport: TelegramTransport | None = None) -> NotificationResult:
+    resolved = load_telegram_config(config)
+    if not resolved.run_summary:
+        return NotificationResult(topic=TOPIC_RUN_SUMMARY, skipped=True, skip_reason="run summaries disabled")
+    messages = format_run_summary(summary, max_length=resolved.max_length, separator=resolved.split_separator)
+    return TelegramNotifier(resolved, transport=transport).send(messages, TOPIC_RUN_SUMMARY)

@@ -1881,6 +1881,8 @@ src/jobs/pipeline.py                 ← collect → apply_snapshot → diff_res
 collectors → core/state → monitors / intelligence / developer
         ↓
 notifications/telegram.py            ← outbound only
+        ↓
+run summaries (successful daily/monitoring runs; configured repositories only)
 ```
 
 No business logic lives in the job layer. It composes public APIs that Phases 1–7

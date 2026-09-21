@@ -43,6 +43,8 @@ from src.notifications.telegram import (
     notify_developer_report,
     notify_monitor_alerts,
     notify_oss_opportunities,
+    notify_run_summary,
+    RunSummary,
 )
 from src.utils.logging import get_logger
 
@@ -122,7 +124,7 @@ def _safe_notify(
 def _collect_and_persist(
     job: str,
     resources: tuple[str, ...],
-) -> tuple[JobResult | None, Any, Any, tuple]:
+) -> tuple[JobResult | None, Any, Any, Any, tuple]:
     """Shared collect → apply → persist sequence.
 
     The configured ``Config`` is returned so the caller does not have to parse
@@ -135,7 +137,7 @@ def _collect_and_persist(
     try:
         config = load_runtime_config()
     except Exception as exc:
-        return _fatal(job, ErrorCode.CONFIG_INVALID, "Could not load configuration", exc), None, None, ()
+        return _fatal(job, ErrorCode.CONFIG_INVALID, "Could not load configuration", exc), None, None, None, ()
 
     try:
         client = GitHubClient()
@@ -153,28 +155,28 @@ def _collect_and_persist(
     try:
         previous = load_previous_state()
     except Exception as exc:
-        return _fatal(job, ErrorCode.STATE_LOAD_FAILED, "Could not load state", exc), None, None, ()
+        return _fatal(job, ErrorCode.STATE_LOAD_FAILED, "Could not load state", exc), None, None, None, ()
 
     try:
         snapshot = build_snapshot(client, config, resources)
     except Exception as exc:
-        return _fatal(job, ErrorCode.COLLECTOR_FAILED, "Collection failed", exc), None, None, ()
+        return _fatal(job, ErrorCode.COLLECTOR_FAILED, "Collection failed", exc), None, None, None, ()
 
     try:
         state, events = apply_and_diff(previous, snapshot)
     except Exception as exc:
-        return _fatal(job, ErrorCode.STATE_VALIDATION_FAILED, "Could not apply snapshot", exc), None, None, ()
+        return _fatal(job, ErrorCode.STATE_VALIDATION_FAILED, "Could not apply snapshot", exc), None, None, None, ()
 
     try:
         persist_state(state)
     except Exception as exc:
-        return _fatal(job, ErrorCode.STATE_SAVE_FAILED, "Could not persist state", exc), None, None, ()
+        return _fatal(job, ErrorCode.STATE_SAVE_FAILED, "Could not persist state", exc), None, None, None, ()
 
     failed = failed_collectors(snapshot)
     if failed:
         logger.warning("%s: collector(s) failed: %s", job, ", ".join(failed))
 
-    return None, config, state, events
+    return None, config, state, snapshot, events
 
 
 def _run_monitors_and_notify(
@@ -202,19 +204,31 @@ def _run_monitors_and_notify(
 # ── Jobs ─────────────────────────────────────────────────────────
 
 
+
+def _run_summary(job: str, config: Any, snapshot: Any, monitor_summary: dict[str, Any]) -> NotificationResult | None:
+    summary = RunSummary(
+        run_type=job,
+        repositories_checked=len(monitored_repository_names(config)),
+        items_collected=sum(result.item_count for result in snapshot.results.values()),
+        alerts_generated=len(monitor_summary.get("alerts", [])),
+        state_persisted=True,
+    )
+    return _safe_notify(job, lambda: notify_run_summary(summary, config=config))
+
 def job_daily(**kwargs: Any) -> JobResult:
     """Repository collection, release/CI detection, and a daily alert digest.
 
     Collects repos, issues, pulls, releases, and workflow runs for every
     configured repository, then runs Phase 4 monitors over the resulting events.
     """
-    failure, config, state, _events = _collect_and_persist(
+    failure, config, state, snapshot, _events = _collect_and_persist(
         JOB_DAILY, ("repos", "issues", "pulls", "releases", "workflows")
     )
     if failure is not None:
         return failure
 
     summary, delivery = _run_monitors_and_notify(state, config)
+    run_summary_delivery = _run_summary(JOB_DAILY, config, snapshot, summary)
 
     return JobResult(
         job=JOB_DAILY,
@@ -223,6 +237,7 @@ def job_daily(**kwargs: Any) -> JobResult:
             "state": state_summary(state),
             "monitors": summary,
             **_notification_data(delivery),
+            "run_summary_notification": _notification_data(run_summary_delivery)["notification"],
         },
     )
 
@@ -233,13 +248,14 @@ def job_monitoring(**kwargs: Any) -> JobResult:
     Intended for a frequent schedule; collects workflow runs and security
     alerts only.
     """
-    failure, config, state, _events = _collect_and_persist(
+    failure, config, state, snapshot, _events = _collect_and_persist(
         JOB_MONITORING, ("workflows", "security")
     )
     if failure is not None:
         return failure
 
     summary, delivery = _run_monitors_and_notify(state, config)
+    run_summary_delivery = _run_summary(JOB_MONITORING, config, snapshot, summary)
 
     return JobResult(
         job=JOB_MONITORING,
@@ -248,6 +264,7 @@ def job_monitoring(**kwargs: Any) -> JobResult:
             "state": state_summary(state),
             "monitors": summary,
             **_notification_data(delivery),
+            "run_summary_notification": _notification_data(run_summary_delivery)["notification"],
         },
     )
 
@@ -258,7 +275,7 @@ def job_weekly_report(**kwargs: Any) -> JobResult:
     Collects the authenticated user plus issues and pulls, converts Phase 3
     events into Phase 6 activity, and delivers a DeveloperReport.
     """
-    failure, config, state, events = _collect_and_persist(
+    failure, config, state, _snapshot, events = _collect_and_persist(
         JOB_WEEKLY_REPORT, ("user", "issues", "pulls")
     )
     if failure is not None:
@@ -334,7 +351,7 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
 
 def job_security(**kwargs: Any) -> JobResult:
     """Dependabot and code-scanning alert collection."""
-    failure, _config, state, _events = _collect_and_persist(JOB_SECURITY, ("security",))
+    failure, _config, state, _snapshot, _events = _collect_and_persist(JOB_SECURITY, ("security",))
     if failure is not None:
         return failure
 

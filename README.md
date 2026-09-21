@@ -63,6 +63,8 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
+Monitoring alerts remain event-driven. When `telegram.run_summary is enabled, successful daily and monitoring runs also send factual completion summaries. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically.
+
 ## Local Secrets (`.env`)
 
 Secrets live in environment variables, never in source or config. For local

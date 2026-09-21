@@ -1,0 +1,9 @@
+repositories: []
+  # Example:
+  # - owner: microsoft
+  #   repo: vscode
+  #   monitors:
+  #     releases: true
+  #     issues: false
+  #     ci: true
+  #     security: true

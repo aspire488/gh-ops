@@ -1,0 +1,19 @@
+global:
+  timezone: "UTC"
+  log_level: "INFO"
+
+rate_limits:
+  requests_per_hour: 5000
+  search_per_minute: 30
+  code_search_per_minute: 10
+  degraded_threshold: 100
+  backoff_base_seconds: 60
+  backoff_max_seconds: 600
+
+state:
+  max_age_days: 90
+  prune_on_save: true
+
+timeouts:
+  request_seconds: 30
+  workflow_minutes: 25

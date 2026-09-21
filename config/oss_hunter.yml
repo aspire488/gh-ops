@@ -1,0 +1,54 @@
+oss_hunter:
+  enabled: true
+  max_results: 10
+
+  queries:
+    - "label:\"good first issue\" language:python is:open"
+    - "label:\"help wanted\" language:python is:open"
+    - "label:\"good first issue\" language:typescript is:open"
+    - "label:\"beginner\" is:open stars:>50"
+    - "label:\"easy\" is:open stars:>100"
+    - "is:issue is:open label:\"bug\" language:python no:assignee"
+
+  filters:
+    exclude_labels:
+      - "wontfix"
+      - "duplicate"
+      - "invalid"
+      - "wip"
+    exclude_bot_authors: true
+    exclude_locked: true
+    min_repo_stars: 5
+    max_issue_age_days: 90
+    exclude_repos: []
+
+  scoring:
+    weights:
+      repo_activity: 0.25
+      issue_freshness: 0.20
+      label_signal: 0.15
+      discussion_activity: 0.15
+      assignment_status: 0.10
+      maintainer_activity: 0.10
+      scope_signal: 0.05
+
+    repo_activity:
+      stars_weight: 0.4
+      recent_commits_weight: 0.3
+      contributors_weight: 0.3
+
+    issue_freshness:
+      decay_function: "linear"
+      max_days: 90
+      fresh_bonus: 0.2
+
+    label_signals:
+      "good first issue": 1.0
+      "help wanted": 0.8
+      "beginner": 0.9
+      "easy": 0.7
+      "bug": 0.5
+      "documentation": 0.6
+
+  tie_breaking:
+    method: "issue_number_asc"

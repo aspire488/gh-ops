@@ -1,0 +1,21 @@
+monitors:
+  repository:
+    enabled: true
+    check_stars: true
+    check_forks: true
+    check_open_issues: true
+    check_recent_activity: true
+
+  ci:
+    enabled: true
+    failure_threshold: 2
+    recovery_notification: true
+
+  release:
+    enabled: true
+    notify_prerelease: false
+    notify_draft: false
+
+  endpoint:
+    enabled: false
+    checks: []

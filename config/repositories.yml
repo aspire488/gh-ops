@@ -1,9 +1,48 @@
-repositories: []
-  # Example:
-  # - owner: microsoft
-  #   repo: vscode
-  #   monitors:
-  #     releases: true
-  #     issues: false
-  #     ci: true
-  #     security: true
+repositories:
+  - owner: aspire488
+    repo: gh-ops
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true
+
+  - owner: aspire488
+    repo: Universal-Engineering-Augmentation
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true
+
+  - owner: aspire488
+    repo: Kio
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true
+
+  - owner: aspire488
+    repo: AURA
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true
+
+  - owner: aspire488
+    repo: medimind
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true
+
+  - owner: aspire488
+    repo: N3MO
+    monitors:
+      releases: true
+      issues: true
+      ci: true
+      security: true

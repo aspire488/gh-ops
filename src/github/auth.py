@@ -32,6 +32,11 @@ class AuthConfig:
     token: str
     token_source: str
 
+    @property
+    def has_token(self) -> bool:
+        """True if a real token is set."""
+        return bool(self.token)
+
     def auth_headers(self) -> dict[str, str]:
         """Generate HTTP headers for authenticated requests.
 
@@ -43,6 +48,10 @@ class AuthConfig:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+
+    def to_headers(self) -> dict[str, str]:
+        """Alias for auth_headers."""
+        return self.auth_headers()
 
     def __repr__(self) -> str:
         """Safe repr that never exposes the token."""

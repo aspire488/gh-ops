@@ -154,6 +154,7 @@ class GitHubClient:
         Returns:
             PaginatedResult with all items
         """
+        # Defense-in-depth: pagination is always GET
         all_items: List[Any] = []
         params = dict(params or {})
         params["per_page"] = min(per_page, 100)

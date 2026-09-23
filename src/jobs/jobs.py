@@ -16,12 +16,14 @@ Failure semantics (deliberate and documented):
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from src.core.dispatcher import Dispatcher, JobResult, JobFunc, get_dispatcher
+from src.core.dispatcher import Dispatcher, JobFunc, JobResult, get_dispatcher
 from src.core.errors import ErrorCode, ErrorCollector, ErrorSeverity, GhOpsError
-from src.developer.reports import generate_report
+from src.core.models import CurrentState
 from src.developer.activity import extract_activity
+from src.developer.reports import generate_report
 from src.github.client import GitHubClient
 from src.intelligence.oss.hunter import HunterConfig, run_hunter
 from src.jobs.pipeline import (
@@ -32,19 +34,21 @@ from src.jobs.pipeline import (
     hunter_config,
     load_previous_state,
     load_runtime_config,
-    monitored_repository_names,
     monitor_config,
+    monitored_repository_names,
     persist_state,
     state_summary,
 )
 from src.monitors import run_monitors, summarize_results
 from src.notifications.telegram import (
     NotificationResult,
+    OssRunSummary,
+    RunSummary,
     notify_developer_report,
     notify_monitor_alerts,
     notify_oss_opportunities,
+    notify_oss_run_summary,
     notify_run_summary,
-    RunSummary,
 )
 from src.utils.logging import get_logger
 
@@ -301,12 +305,43 @@ def job_weekly_report(**kwargs: Any) -> JobResult:
     )
 
 
+def _oss_identity(opportunity: Any) -> str:
+    """Stable cross-run OSS identity, matching Phase 5 deduplication."""
+    repo, number = opportunity.identity()
+    return f"{repo}#{number}"
+
+
+def _notified_oss_identities(state: CurrentState) -> set[str]:
+    """Identities already successfully delivered in a previous run."""
+    return set(state.resources.get("oss_opportunities", {}))
+
+
+def _state_with_notified_oss(state: CurrentState, identities: set[str]) -> CurrentState:
+    """Return state with ``oss_opportunities`` updated.
+
+    Preserves every other resource type so a concurrent daily snapshot is not
+    discarded (same partial-update discipline as Phase 3).
+    """
+    resources = dict(state.resources)
+    resources["oss_opportunities"] = {
+        identity: {"notified": True} for identity in sorted(identities)
+    }
+    return CurrentState(
+        resources=resources,
+        etags=state.etags,
+        update_log=state.update_log,
+        last_updated=state.last_updated,
+        schema_version=state.schema_version,
+    )
+
+
 def job_oss_hunt(**kwargs: Any) -> JobResult:
     """OSS opportunity discovery, scoring, and delivery.
 
-    Delegates entirely to Phase 5's hunter. Persisting discovered opportunities
-    is deliberately not done here: there is no Phase 5 state layer, and inventing
-    one would duplicate Phase 3.
+    Delegates to Phase 5's hunter, then delivers only opportunities that have
+    not been successfully notified before. Cross-run dedup state lives under
+    the ``oss_opportunities`` resource key in Phase 3 state (at-least-once
+    delivery: identities are marked only when Telegram reports success).
     """
     try:
         config = load_runtime_config()
@@ -324,16 +359,58 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
         return JobResult(job=JOB_OSS_HUNT, success=True, data={"disabled": True})
 
     try:
+        previous_state = load_previous_state()
+    except Exception as exc:
+        return _fatal(JOB_OSS_HUNT, ErrorCode.STATE_LOAD_FAILED, "Could not load state", exc)
+
+    try:
         hunter_result = run_hunter(client, hunter_settings)
     except Exception as exc:
         return _fatal(JOB_OSS_HUNT, ErrorCode.SEARCH_FAILED, "OSS hunter failed", exc)
 
+    notified = _notified_oss_identities(previous_state)
+    new_opportunities = [
+        opp
+        for opp in hunter_result.opportunities
+        if _oss_identity(opp) not in notified
+    ]
+
+    # Exactly one batch delivery per run, even when the list is empty (the
+    # formatter emits nothing and the notifier reports "nothing to send").
     delivery = _safe_notify(
         JOB_OSS_HUNT,
         lambda: notify_oss_opportunities(
-            hunter_result.opportunities,
+            new_opportunities,
             config=config,
             limit=hunter_settings.max_results,
+        ),
+    )
+    if delivery is not None and delivery.ok:
+        notified.update(_oss_identity(opp) for opp in new_opportunities)
+    elif delivery is None:
+        logger.warning("%s: opportunity delivery raised; not marking identities", JOB_OSS_HUNT)
+    elif not delivery.ok:
+        logger.warning(
+            "%s: opportunity delivery failed; not marking identities (%s)",
+            JOB_OSS_HUNT,
+            delivery.failed_chats,
+        )
+
+    try:
+        persist_state(_state_with_notified_oss(previous_state, notified))
+    except Exception as exc:
+        return _fatal(JOB_OSS_HUNT, ErrorCode.STATE_SAVE_FAILED, "Could not persist state", exc)
+
+    summary_delivery = _safe_notify(
+        JOB_OSS_HUNT,
+        lambda: notify_oss_run_summary(
+            OssRunSummary(
+                queries_run=hunter_result.queries_run,
+                total_issues_found=hunter_result.total_issues_found,
+                opportunities=len(hunter_result.opportunities),
+                duplicates=hunter_result.total_duplicates,
+            ),
+            config=config,
         ),
     )
 
@@ -342,9 +419,11 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
         success=True,
         data={
             "opportunities": len(hunter_result.opportunities),
+            "new_opportunities": len(new_opportunities),
             "queries_run": hunter_result.queries_run,
             "queries_failed": hunter_result.queries_failed,
             **_notification_data(delivery),
+            "oss_summary_notification": _notification_data(summary_delivery)["notification"],
         },
     )
 

@@ -17,7 +17,6 @@ from src.notifications.telegram import (
 )
 from tests.notifications._fakes import TEST_TOKEN, assert_no_token
 
-
 # ── Token resolution ─────────────────────────────────────────────
 
 
@@ -74,6 +73,19 @@ class TestConfigDefaults:
 
     def test_disabled_by_default(self):
         assert TelegramConfig().enabled is False
+
+    def test_run_summary_disabled_by_default(self):
+        assert TelegramConfig.from_dict({"enabled": True}).run_summary is False
+
+    def test_oss_summary_disabled_by_default(self):
+        assert TelegramConfig.from_dict({"enabled": True}).oss_summary is False
+
+    def test_run_and_oss_summary_flags_parse(self):
+        config = TelegramConfig.from_dict({
+            "telegram": {"enabled": True, "run_summary": True, "oss_summary": True},
+        })
+        assert config.run_summary is True
+        assert config.oss_summary is True
 
     def test_non_mapping_raises(self):
         with pytest.raises(ConfigError):

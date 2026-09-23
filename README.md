@@ -16,9 +16,9 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 5 — OSS Intelligence | ✅ Complete | 494/494 tests |
 | Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
 | Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
-| Phase 8 — GitHub Actions | ✅ Complete | 1054/1054 tests |
+| Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
 
-**Total: 1054/1054 tests passing.**
+**Total: 1084/1084 tests passing.**
 
 Figures are cumulative as of the end of each phase.
 
@@ -63,7 +63,7 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
-Monitoring alerts remain event-driven. When `telegram.run_summary is enabled, successful daily and monitoring runs also send factual completion summaries. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically.
+Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and monitoring runs also send factual completion summaries. When `telegram.oss_summary` is enabled, the OSS hunter sends a completion summary after each run. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery).
 
 ## Local Secrets (`.env`)
 
@@ -420,6 +420,8 @@ telegram:
 | `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
 | `oss_opportunities` | `notify_oss_opportunities` |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
+| `run_summary` | `notify_run_summary` — daily/monitoring completion summary (`telegram.run_summary`) |
+| `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (`telegram.oss_summary`) |
 
 ### Delivery Behavior
 
@@ -606,15 +608,16 @@ or contacts GitHub.
 | `developer/activity.py` | 38 | Activity extraction, filtering, dedup, data quality |
 | `developer/statistics.py` | 21 | Counts, repo breakdown, periods, active days |
 | `developer/reports.py` | 16 | Report generation, periods, formatting |
-| `notifications/telegram.py` (config) | 43 | Token resolution, config validation, chat routing |
+| `notifications/telegram.py` (config) | 46 | Token resolution, config validation, chat routing, summary toggles |
 | `notifications/telegram.py` (transport) | 40 | Send, 4xx/5xx, retries, Retry-After, token safety |
 | `notifications/telegram.py` (formatters) | 47 | Escaping, splitting, long messages, determinism |
 | `notifications/telegram.py` (notifier) | 33 | Routing, failure isolation, safe skipping |
+| `notifications/telegram.py` (summaries) | 11 | Run/oss summary formatting, toggles, delivery isolation |
 | `core/dispatcher.py` (CLI) | 24 | Exit codes, env-var job selection, module + `run_local.py` entry points |
-| `jobs/jobs.py` | 34 | Six jobs, dispatch, partial failure, delivery isolation |
+| `jobs/jobs.py` | 44 | Six jobs, dispatch, partial failure, delivery isolation, OSS dedup |
 | `jobs/*` (architecture) | 17 | Dependency direction, no HTTP/LLM/eval in the job layer |
-| `.github/workflows/*` | 213 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
-| **Total** | **1054** | |
+| `.github/workflows/*` | 220 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
+| **Total** | **1084** | |
 
 ## Project Structure
 
@@ -645,7 +648,7 @@ gh-ops/
 ├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml, telegram.yml)
 ├── .env.example        # Tracked template; real .env is gitignored
 ├── data/               # Runtime state (gitignored, carried by Actions cache)
-├── tests/              # Test suite (1054 tests)
+├── tests/              # Test suite (1084 tests)
 └── scripts/            # Local development scripts
 ```
 

@@ -28,7 +28,6 @@ from src.jobs.jobs import (
     register_all_jobs,
 )
 
-
 # ── Fixtures and doubles ─────────────────────────────────────────
 
 
@@ -316,6 +315,7 @@ class TestOssHuntJob:
         result = jobs_module.job_oss_hunt()
         assert result.success is True
         assert result.data["disabled"] is True
+        assert pipeline["persisted"] is None
 
     def test_delivers_opportunities(self, pipeline, monkeypatch):
         from src.intelligence.oss.hunter import HunterResult
@@ -349,11 +349,193 @@ class TestOssHuntJob:
         result = jobs_module.job_oss_hunt()
         assert result.success is False
 
-    def test_does_not_write_state(self, pipeline, monkeypatch):
-        """Phase 5 has no state layer; the job must not invent one."""
+    def test_disabled_hunter_does_not_write_state(self, pipeline, monkeypatch):
         monkeypatch.setattr(jobs_module, "hunter_config", lambda config: {"enabled": False})
         jobs_module.job_oss_hunt()
         assert pipeline["persisted"] is None
+
+    @pytest.fixture()
+    def oss_env(self, monkeypatch: pytest.MonkeyPatch, pipeline):
+        """Hunter + delivery fakes for an enabled run with one opportunity."""
+        from src.intelligence.oss.hunter import HunterResult
+        from tests.notifications._fakes import make_opportunity
+
+        opp = make_opportunity()
+        opp_two = make_opportunity(
+            repo_full_name="other/repo",
+            issue_number=7,
+            issue_id=10007,
+            html_url="https://github.com/other/repo/issues/7",
+        )
+        record = {
+            "hunter": HunterResult(
+                opportunities=[opp, opp_two],
+                queries_run=1,
+                queries_failed=0,
+                total_issues_found=5,
+                total_duplicates=3,
+            ),
+            "deliveries": [],
+            "summaries": [],
+            "result_ok": True,
+        }
+
+        def fake_run_hunter(client, config):
+            return record["hunter"]
+
+        def fake_notify_opps(opps, **kw):
+            record["deliveries"].append(list(opps))
+            if record["result_ok"]:
+                return _result_ok(topic="oss_opportunities")
+            return _result_failed()
+
+        def fake_notify_summary(summary, **kw):
+            record["summaries"].append(summary)
+            return _result_ok(topic="oss_summary")
+
+        monkeypatch.setattr(jobs_module, "run_hunter", fake_run_hunter)
+        monkeypatch.setattr(jobs_module, "notify_oss_opportunities", fake_notify_opps)
+        monkeypatch.setattr(jobs_module, "notify_oss_run_summary", fake_notify_summary)
+        record["opportunity"] = opp
+        record["opportunity_two"] = opp_two
+        return record
+
+    def test_persists_notified_identities_on_success(self, pipeline, oss_env):
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        assert "persist_state" in pipeline["calls"]
+        notified = pipeline["persisted"].resources["oss_opportunities"]
+        assert notified == {
+            "octo/example#42": {"notified": True},
+            "other/repo#7": {"notified": True},
+        }
+        assert result.data["new_opportunities"] == 2
+
+    def test_second_run_filters_already_notified(self, pipeline, oss_env):
+        jobs_module.job_oss_hunt()
+
+        def load_state_with_previous():
+            return pipeline["persisted"]
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(jobs_module, "load_previous_state", load_state_with_previous)
+        try:
+            result = jobs_module.job_oss_hunt()
+        finally:
+            monkeypatch.undo()
+
+        assert result.success is True
+        assert result.data["new_opportunities"] == 0
+        assert result.data["opportunities"] == 2
+        # Exactly one batch call per run, even when nothing is new.
+        assert len(oss_env["deliveries"]) == 2
+        assert oss_env["deliveries"][1] == []
+        # Previously notified identities are preserved.
+        notified = pipeline["persisted"].resources["oss_opportunities"]
+        assert set(notified) == {"octo/example#42", "other/repo#7"}
+
+    def test_failed_delivery_does_not_mark_identities(self, pipeline, oss_env):
+        oss_env["result_ok"] = False
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        notified = pipeline["persisted"].resources["oss_opportunities"]
+        assert notified == {}
+        assert result.data["notification"]["ok"] is False
+
+    def test_delivery_exception_does_not_mark_identities(self, pipeline, oss_env, monkeypatch):
+        def boom(opps, **kw):
+            raise RuntimeError("telegram exploded")
+
+        monkeypatch.setattr(jobs_module, "notify_oss_opportunities", boom)
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        assert pipeline["persisted"].resources["oss_opportunities"] == {}
+        assert result.data["notification"] == {
+            "error": "delivery raised an unexpected exception"
+        }
+
+    def test_preserves_other_resources_in_state(self, pipeline, oss_env):
+        def previous_state():
+            base = _empty_state()
+            base.resources["repos"] = {"octo/r": {"full_name": "octo/r"}}
+            return base
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(jobs_module, "load_previous_state", previous_state)
+        try:
+            jobs_module.job_oss_hunt()
+        finally:
+            monkeypatch.undo()
+
+        resources = pipeline["persisted"].resources
+        assert resources["repos"] == {"octo/r": {"full_name": "octo/r"}}
+        assert "oss_opportunities" in resources
+
+    def test_fatal_when_state_load_fails(self, pipeline, oss_env, monkeypatch):
+        def boom():
+            raise RuntimeError("corrupt state")
+
+        monkeypatch.setattr(jobs_module, "load_previous_state", boom)
+        result = jobs_module.job_oss_hunt()
+        assert result.success is False
+
+    def test_fatal_when_state_save_fails(self, pipeline, oss_env, monkeypatch):
+        def boom(state):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(jobs_module, "persist_state", boom)
+        result = jobs_module.job_oss_hunt()
+        assert result.success is False
+
+    def test_sends_oss_summary_once_per_run(self, pipeline, oss_env):
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        assert len(oss_env["summaries"]) == 1
+        summary = oss_env["summaries"][0]
+        assert summary.queries_run == 1
+        assert summary.total_issues_found == 5
+        assert summary.opportunities == 2
+        assert summary.duplicates == 3
+        assert "oss_summary_notification" in result.data
+
+    def test_oss_summary_failure_does_not_fail_job(self, pipeline, oss_env, monkeypatch):
+        def boom(summary, **kw):
+            raise RuntimeError("telegram exploded")
+
+        monkeypatch.setattr(jobs_module, "notify_oss_run_summary", boom)
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        assert "persist_state" in pipeline["calls"]
+        assert result.data["oss_summary_notification"] == {
+            "error": "delivery raised an unexpected exception"
+        }
+
+    def test_empty_opportunity_list_still_notifies_once(self, pipeline, monkeypatch):
+        from src.intelligence.oss.hunter import HunterResult
+
+        monkeypatch.setattr(
+            jobs_module,
+            "run_hunter",
+            lambda client, config: HunterResult(opportunities=[], queries_run=1),
+        )
+        delivered = []
+        summaries = []
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_oss_opportunities",
+            lambda opps, **kw: (delivered.append(list(opps)), _result_ok())[1],
+        )
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_oss_run_summary",
+            lambda summary, **kw: (summaries.append(summary), _result_ok())[1],
+        )
+        result = jobs_module.job_oss_hunt()
+        assert result.success is True
+        assert len(delivered) == 1
+        assert delivered[0] == []
+        assert len(summaries) == 1
+        assert pipeline["persisted"] is not None
 
 
 class TestSecurityJob:
@@ -485,3 +667,4 @@ class TestNotificationFailureIsolation:
         result = jobs_module.job_oss_hunt()
         assert result.success is True
         assert result.data["queries_run"] == 1
+        assert "persist_state" in pipeline["calls"]

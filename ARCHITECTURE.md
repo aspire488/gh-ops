@@ -558,9 +558,9 @@ src/intelligence/oss/scorer.py
     → Return ranked list
     ↓
 src/core/state.py
-    → Load oss_opportunities.json
-    → Deduplicate against already-reported
-    → Save new state
+    → Load prior state (oss_opportunities resource key)
+    → Deduplicate against already-notified identities
+    → Persist updated state
     ↓
 src/notifications/telegram.py
     → Format opportunity report
@@ -696,9 +696,12 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 
 **Deduplication:**
 
-- Track issue URLs in `data/state/oss_opportunities.json`
-- Hash of (repo, issue_number) for dedup
-- Prune entries older than configurable threshold
+- Cross-run notification dedup lives under the `oss_opportunities` resource key
+  in Phase 3 state (`data/state/current.json`), keyed by `(repo, issue_number)`
+- Identities are marked only after Telegram reports a successful delivery
+  (at-least-once semantics)
+- The job participates in the shared `gh-ops-state` cache like every other
+  state-writing workflow
 
 ---
 
@@ -745,7 +748,7 @@ The six jobs, one per workflow:
 | `daily` | repos, issues, pulls, releases, workflows | Phase 4 monitors + alert digest | yes |
 | `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
 | `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
-| `oss-hunt` | — | Phase 5 hunter + delivery | no |
+| `oss-hunt` | — | Phase 5 hunter + dedup delivery + OSS summary | yes (`oss_opportunities` key) |
 | `security` | security | — | yes |
 | `status` | — | read-only state/config report | no |
 
@@ -864,8 +867,9 @@ snapshot that omits the other's update. Serializing them removes the race.
 `cancel-in-progress: false` is deliberate. Cancelling a run that has already
 persisted state would discard that update.
 
-`oss-hunter.yml` is **not** in the group, because the hunter job neither reads
-nor writes state; it only sends a Telegram message.
+`oss-hunter.yml` **is** in the group: the hunter job reads and writes the
+`oss_opportunities` resource key in Phase 3 state for cross-run notification
+dedup, so it must serialize with every other state writer.
 
 ### Known Limitations of the Actions Layer
 
@@ -1565,15 +1569,18 @@ figures are in the README status table.
 - `tests/utils/` — 70 (text, time, .env loading)
 - `tests/intelligence/` — 106 (models, queries, filters, scorer, dedup, hunter)
 - `tests/developer/` — 75 (activity, statistics, reports)
-- `tests/notifications/` — 163 (telegram config, transport, formatters, notifier)
-- `tests/jobs/` — 75 (job dispatch, CLI entry points, architecture boundary)
-- `tests/ci/` — 213 (static workflow validation)
-- **Total: 1054 passing**
+- `tests/notifications/` — 177 (telegram config, transport, formatters, notifier, run/oss summaries)
+- `tests/jobs/` — 85 (job dispatch, CLI entry points, architecture boundary, OSS dedup)
+- `tests/ci/` — 220 (static workflow validation)
+- **Total: 1084 passing**
 - Security audit: 0 FAIL / 0 WARN
 
-`ruff` and `mypy` are declared development dependencies but were not installed in
-the working environment, so those two checks were not run and are not claimed to
-have passed.
+`ruff` and `mypy` are declared development dependencies. On this batch, `ruff`
+was run over the changed files (`src/jobs/jobs.py`, `src/notifications/*`,
+related tests) and is clean for those paths; `mypy` is not installed in the
+working environment, so that check was not run and is not claimed to have
+passed. The repository as a whole still carries pre-existing ruff findings
+outside this change.
 
 **Verification:** `verify-change` at `standard` tier.
 
@@ -1779,6 +1786,8 @@ accepts no inbound control, and calls no LLM, agent, MCP, or UEA runtime.
 | `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
 | `oss_opportunities` | `notify_oss_opportunities` — ranked opportunities |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
+| `run_summary` | `notify_run_summary` — daily/monitoring completion summary (toggle: `telegram.run_summary`) |
+| `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (toggle: `telegram.oss_summary`) |
 
 A chat target with no `topics` receives every topic. Chats are served in
 configured order.
@@ -1895,7 +1904,7 @@ already own; anything else would duplicate an existing layer.
 | `daily` | repos, issues, pulls, releases, workflows | Phase 4 monitors + alert digest | yes |
 | `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
 | `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
-| `oss-hunt` | — | Phase 5 hunter + delivery | no |
+| `oss-hunt` | — | Phase 5 hunter + dedup delivery + OSS summary | yes (`oss_opportunities` key) |
 | `security` | security | — | yes |
 | `status` | — | read-only state/config report | no |
 
@@ -1924,12 +1933,13 @@ Documented limitations: 7-day idle eviction, cache growth inside a 10 GB LRU
 pool, concurrency queue depth, and Dependabot alerts potentially being refused by
 `GITHUB_TOKEN`. See §H, "Known Limitations of the Actions Layer".
 
-**Total: 1054/1054 passing**
+**Total: 1084/1084 passing**
 
 **Verification:** static workflow validation, architecture boundary tests, and
-subprocess exit-code tests. `ruff` and `mypy` are declared dev dependencies but
-were not installed in the working environment, so those two checks were not run
-and are not claimed to have passed.
+subprocess exit-code tests. `ruff` was run over the files changed in this batch
+and is clean for those paths. `mypy` is a declared dev dependency but was not
+installed in the working environment, so that check was not run and is not
+claimed to have passed.
 
 ### Phase 9 — Security Hardening
 

@@ -42,8 +42,9 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import requests
 
@@ -79,6 +80,7 @@ TOPIC_ALERTS = "alerts"
 TOPIC_OSS_OPPORTUNITIES = "oss_opportunities"
 TOPIC_DEVELOPER_REPORT = "developer_report"
 TOPIC_RUN_SUMMARY = "run_summary"
+TOPIC_OSS_SUMMARY = "oss_summary"
 
 #: Telegram error descriptions are untrusted and unbounded; keep errors small.
 _MAX_ERROR_DESCRIPTION = 300
@@ -176,6 +178,7 @@ class TelegramConfig:
 
     enabled: bool = False
     run_summary: bool = False
+    oss_summary: bool = False
     targets: tuple[ChatTarget, ...] = ()
     max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH
     parse_mode: str = TELEGRAM_DEFAULT_PARSE_MODE
@@ -272,6 +275,7 @@ class TelegramConfig:
         return cls(
             enabled=bool(section.get("enabled", False)),
             run_summary=bool(section.get("run_summary", False)),
+            oss_summary=bool(section.get("oss_summary", False)),
             targets=_parse_chat_ids(section.get("chat_ids", [])),
             max_length=max_length,
             parse_mode=str(message.get("parse_mode", TELEGRAM_DEFAULT_PARSE_MODE)),
@@ -290,6 +294,7 @@ class TelegramConfig:
         return {
             "enabled": self.enabled,
             "run_summary": self.run_summary,
+            "oss_summary": self.oss_summary,
             "targets": [t.to_dict() for t in self.targets],
             "max_length": self.max_length,
             "parse_mode": self.parse_mode,
@@ -663,6 +668,22 @@ def format_run_summary(summary: RunSummary, *, max_length: int = TELEGRAM_MAX_ME
     state = "persisted" if summary.state_persisted else "not persisted"
     body = f"Run type: {summary.run_type}\nRepositories checked: {summary.repositories_checked}\nItems collected: {summary.items_collected}\nAlerts: {summary.alerts_generated}\nState: {state}"
     return _compose_messages("GH-OPS Monitoring Complete", [body], max_length=max_length, separator=separator)
+
+
+@dataclass(frozen=True)
+class OssRunSummary:
+    queries_run: int
+    total_issues_found: int
+    opportunities: int
+    duplicates: int
+
+
+def format_oss_run_summary(summary: OssRunSummary, *, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH, separator: str = "\n\n") -> list[str]:
+    body = f"Queries: {summary.queries_run}\nResults: {summary.total_issues_found}\nOpportunities: {summary.opportunities}\nDuplicates: {summary.duplicates}"
+    if summary.opportunities == 0:
+        body += "\n\nNo new qualifying opportunities found."
+    return _compose_messages("GH-OPS · OSS Hunter Complete", [body], max_length=max_length, separator=separator)
+
 
 class TelegramTransport:
     """HTTP transport for the Telegram Bot API.
@@ -1215,3 +1236,11 @@ def notify_run_summary(summary: RunSummary, *, config: Any = None, transport: Te
         return NotificationResult(topic=TOPIC_RUN_SUMMARY, skipped=True, skip_reason="run summaries disabled")
     messages = format_run_summary(summary, max_length=resolved.max_length, separator=resolved.split_separator)
     return TelegramNotifier(resolved, transport=transport).send(messages, TOPIC_RUN_SUMMARY)
+
+
+def notify_oss_run_summary(summary: OssRunSummary, *, config: Any = None, transport: TelegramTransport | None = None) -> NotificationResult:
+    resolved = load_telegram_config(config)
+    if not resolved.oss_summary:
+        return NotificationResult(topic=TOPIC_OSS_SUMMARY, skipped=True, skip_reason="OSS summaries disabled")
+    messages = format_oss_run_summary(summary, max_length=resolved.max_length, separator=resolved.split_separator)
+    return TelegramNotifier(resolved, transport=transport).send(messages, TOPIC_OSS_SUMMARY)

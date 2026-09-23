@@ -1,9 +1,9 @@
 # OSS contribution opportunity discovery, scoring, and delivery.
 #
-# Delegates entirely to Phase 5's hunter. This job neither reads nor writes
-# state: Phase 5 has no state layer, and inventing one would duplicate Phase 3.
-# The cache steps are therefore omitted entirely rather than being included as
-# no-ops.
+# Delegates to Phase 5's hunter, then uses Phase 3 state under the
+# oss_opportunities resource key for cross-run notification dedup, so this
+# workflow participates in the shared gh-ops-state cache like the other
+# state-writing workflows.
 name: OSS Hunter
 
 on:
@@ -12,9 +12,9 @@ on:
     - cron: "0 10 * * *"
   workflow_dispatch:
 
-# No concurrency group is needed: this workflow never touches the shared state
-# file, so a concurrent run cannot corrupt it. The hunter's only write is an
-# outbound Telegram message.
+concurrency:
+  group: gh-ops-state
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -41,9 +41,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/state
+          key: gh-ops-state-oss-hunt-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            gh-ops-state-
+
       - name: Run oss-hunt job
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GHOPS_JOB: oss-hunt
         run: python -m src.jobs
+
+      - name: Save state
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/state
+          key: gh-ops-state-oss-hunt-${{ github.run_id }}-${{ github.run_attempt }}

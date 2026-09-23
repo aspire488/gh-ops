@@ -31,10 +31,18 @@ EXPECTED_WORKFLOWS = {
 }
 
 #: Workflows that read-modify-write the shared state file.
-STATE_WRITING = ("daily.yml", "monitoring.yml", "weekly-report.yml", "security.yml", "manual.yml")
+STATE_WRITING = (
+    "daily.yml",
+    "monitoring.yml",
+    "weekly-report.yml",
+    "oss-hunter.yml",
+    "security.yml",
+    "manual.yml",
+)
 
-#: Workflows that never touch state.
-STATE_FREE = ("oss-hunter.yml",)
+#: Workflows that never touch state. Every workflow must appear in exactly
+#: one of STATE_WRITING or STATE_FREE — asserted by test_state_lists_partition.
+STATE_FREE: tuple[str, ...] = ()
 
 #: SHA -> the version comment it must carry, so pins stay auditable.
 PINNED_ACTIONS = {
@@ -376,6 +384,12 @@ class TestStatePersistence:
     def test_state_free_workflows_do_not_touch_the_cache(self, filename):
         workflow = load_workflow(filename)
         assert not [s for s in _uses_steps(workflow) if "actions/cache" in s["uses"]]
+
+    def test_state_lists_partition_all_workflows(self):
+        """Each workflow is either state-writing or state-free — never both."""
+        names = set(EXPECTED_WORKFLOWS)
+        assert set(STATE_WRITING) | set(STATE_FREE) == names
+        assert not (set(STATE_WRITING) & set(STATE_FREE))
 
     @pytest.mark.parametrize("filename", STATE_WRITING)
     def test_restore_precedes_run_and_save_follows_it(self, filename):

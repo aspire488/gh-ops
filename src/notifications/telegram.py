@@ -81,6 +81,7 @@ TOPIC_OSS_OPPORTUNITIES = "oss_opportunities"
 TOPIC_DEVELOPER_REPORT = "developer_report"
 TOPIC_RUN_SUMMARY = "run_summary"
 TOPIC_OSS_SUMMARY = "oss_summary"
+TOPIC_SECURITY = "security"
 
 #: Telegram error descriptions are untrusted and unbounded; keep errors small.
 _MAX_ERROR_DESCRIPTION = 300
@@ -179,6 +180,7 @@ class TelegramConfig:
     enabled: bool = False
     run_summary: bool = False
     oss_summary: bool = False
+    security_summary: bool = False
     targets: tuple[ChatTarget, ...] = ()
     max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH
     parse_mode: str = TELEGRAM_DEFAULT_PARSE_MODE
@@ -276,6 +278,7 @@ class TelegramConfig:
             enabled=bool(section.get("enabled", False)),
             run_summary=bool(section.get("run_summary", False)),
             oss_summary=bool(section.get("oss_summary", False)),
+            security_summary=bool(section.get("security_summary", False)),
             targets=_parse_chat_ids(section.get("chat_ids", [])),
             max_length=max_length,
             parse_mode=str(message.get("parse_mode", TELEGRAM_DEFAULT_PARSE_MODE)),
@@ -295,6 +298,7 @@ class TelegramConfig:
             "enabled": self.enabled,
             "run_summary": self.run_summary,
             "oss_summary": self.oss_summary,
+            "security_summary": self.security_summary,
             "targets": [t.to_dict() for t in self.targets],
             "max_length": self.max_length,
             "parse_mode": self.parse_mode,
@@ -683,6 +687,92 @@ def format_oss_run_summary(summary: OssRunSummary, *, max_length: int = TELEGRAM
     if summary.opportunities == 0:
         body += "\n\nNo new qualifying opportunities found."
     return _compose_messages("GH-OPS · OSS Hunter Complete", [body], max_length=max_length, separator=separator)
+
+
+def format_security_alerts(
+    findings: Any,
+    *,
+    max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+    separator: str = "\n\n",
+) -> list[str]:
+    """Format new security findings for delivery.
+
+    Findings are read structurally rather than by type so this module never
+    imports ``src.intelligence.security`` (keeping the delivery layer free of
+    intelligence dependencies).
+
+    Args:
+        findings: Sequence of SecurityFinding-like objects (or a report with
+            ``.actionable``).
+        max_length: Maximum characters per message.
+        separator: Preferred split point.
+
+    Returns:
+        Messages, or an empty list when there is nothing to send.
+    """
+    items = list(getattr(findings, "actionable", findings))
+    if not items:
+        return []
+
+    blocks: list[str] = []
+    for index, finding in enumerate(items, start=1):
+        severity = str(getattr(finding, "severity", "unknown") or "unknown").upper()
+        repository = str(getattr(finding, "repository", "") or "")
+        source = str(getattr(finding, "source", "") or "")
+        package = str(getattr(finding, "package_name", "") or "")
+        summary = str(getattr(finding, "summary", "") or "")
+        html_url = str(getattr(finding, "html_url", "") or "")
+
+        header = f"{index}. [{severity}] {repository}"
+        if source:
+            header = f"{header} ({source})"
+        lines = [header]
+        if package:
+            lines.append(f"Package: {package}")
+        if summary:
+            lines.append(summary)
+        if html_url:
+            lines.append(html_url)
+        blocks.append("\n".join(lines))
+
+    return _compose_messages(
+        f"gh-ops security alerts ({len(items)})",
+        blocks,
+        max_length=max_length,
+        separator=separator,
+    )
+
+
+def format_security_summary(
+    report: Any,
+    *,
+    max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+    separator: str = "\n\n",
+) -> list[str]:
+    """Format a SecurityReport-like object as a factual completion summary."""
+    total = int(getattr(report, "total", 0) or 0)
+    open_count = int(getattr(report, "open_count", 0) or 0)
+    actionable = int(getattr(report, "actionable_count", 0) or 0)
+    by_severity = dict(getattr(report, "by_severity", {}) or {})
+
+    severity_line = ", ".join(f"{k}: {v}" for k, v in sorted(by_severity.items()))
+    if not severity_line:
+        severity_line = "none"
+
+    body = (
+        f"Findings: {total}\n"
+        f"Open: {open_count}\n"
+        f"Actionable: {actionable}\n"
+        f"By severity: {severity_line}"
+    )
+    if total == 0:
+        body += "\n\nNo security alerts collected."
+    return _compose_messages(
+        "GH-OPS · Security Intelligence",
+        [body],
+        max_length=max_length,
+        separator=separator,
+    )
 
 
 class TelegramTransport:
@@ -1244,3 +1334,42 @@ def notify_oss_run_summary(summary: OssRunSummary, *, config: Any = None, transp
         return NotificationResult(topic=TOPIC_OSS_SUMMARY, skipped=True, skip_reason="OSS summaries disabled")
     messages = format_oss_run_summary(summary, max_length=resolved.max_length, separator=resolved.split_separator)
     return TelegramNotifier(resolved, transport=transport).send(messages, TOPIC_OSS_SUMMARY)
+
+
+def notify_security_alerts(
+    findings: Any,
+    *,
+    config: Any = None,
+    transport: TelegramTransport | None = None,
+) -> NotificationResult:
+    """Format and deliver new security findings (at-least-once batch)."""
+    resolved = load_telegram_config(config)
+    notifier = TelegramNotifier(resolved, transport=transport)
+    messages = format_security_alerts(
+        findings,
+        max_length=resolved.max_length,
+        separator=resolved.split_separator,
+    )
+    return notifier.send(messages, TOPIC_SECURITY)
+
+
+def notify_security_summary(
+    report: Any,
+    *,
+    config: Any = None,
+    transport: TelegramTransport | None = None,
+) -> NotificationResult:
+    """Format and deliver the security intelligence run summary."""
+    resolved = load_telegram_config(config)
+    if not resolved.security_summary:
+        return NotificationResult(
+            topic=TOPIC_SECURITY,
+            skipped=True,
+            skip_reason="security summaries disabled",
+        )
+    messages = format_security_summary(
+        report,
+        max_length=resolved.max_length,
+        separator=resolved.split_separator,
+    )
+    return TelegramNotifier(resolved, transport=transport).send(messages, TOPIC_SECURITY)

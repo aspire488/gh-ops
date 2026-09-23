@@ -42,7 +42,11 @@ STATE_WRITING = (
 
 #: Workflows that never touch state. Every workflow must appear in exactly
 #: one of STATE_WRITING or STATE_FREE — asserted by test_state_lists_partition.
-STATE_FREE: tuple[str, ...] = ()
+STATE_FREE: tuple[str, ...] = ("ci.yml",)
+
+#: Repo CI workflows that do not dispatch a gh-ops job. They are validated for
+#: presence and state-partition only; job-dispatch tests use EXPECTED_WORKFLOWS.
+SUPPORT_WORKFLOWS: tuple[str, ...] = ("ci.yml",)
 
 #: SHA -> the version comment it must carry, so pins stay auditable.
 PINNED_ACTIONS = {
@@ -121,7 +125,8 @@ def all_workflow_names() -> list[str]:
 class TestWorkflowSet:
     def test_exactly_the_expected_workflows_exist(self):
         found = sorted(p.name for p in WORKFLOW_DIR.glob("*.yml"))
-        assert found == sorted(EXPECTED_WORKFLOWS)
+        expected = sorted(set(EXPECTED_WORKFLOWS) | set(SUPPORT_WORKFLOWS))
+        assert found == expected
 
     @pytest.mark.parametrize("filename", all_workflow_names())
     def test_is_valid_yaml(self, filename):
@@ -387,7 +392,7 @@ class TestStatePersistence:
 
     def test_state_lists_partition_all_workflows(self):
         """Each workflow is either state-writing or state-free — never both."""
-        names = set(EXPECTED_WORKFLOWS)
+        names = set(EXPECTED_WORKFLOWS) | set(SUPPORT_WORKFLOWS)
         assert set(STATE_WRITING) | set(STATE_FREE) == names
         assert not (set(STATE_WRITING) & set(STATE_FREE))
 

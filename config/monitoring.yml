@@ -16,6 +16,13 @@ monitors:
     notify_prerelease: false
     notify_draft: false
 
+  security:
+    enabled: true
+    alert_severities:
+      - critical
+      - high
+    max_findings: 50
+
   endpoint:
     enabled: false
     checks: []

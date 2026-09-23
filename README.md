@@ -17,10 +17,11 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
 | Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
 | Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
+| Security Intelligence batch | ✅ Complete | 1150/1150 tests |
 
-**Total: 1084/1084 tests passing.**
+**Total: 1150/1150 tests passing.**
 
-Figures are cumulative as of the end of each phase.
+Figures are cumulative as of the end of each phase (Security Intelligence is a post-Phase-8 batch).
 
 ## Architecture
 
@@ -63,7 +64,7 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
-Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and monitoring runs also send factual completion summaries. When `telegram.oss_summary` is enabled, the OSS hunter sends a completion summary after each run. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery).
+Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and monitoring runs also send factual completion summaries. When `telegram.oss_summary` is enabled, the OSS hunter sends a completion summary after each run. When `telegram.security_summary` is enabled, the security job also sends a completion summary. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery).
 
 ## Local Secrets (`.env`)
 
@@ -422,6 +423,7 @@ telegram:
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
 | `run_summary` | `notify_run_summary` — daily/monitoring completion summary (`telegram.run_summary`) |
 | `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (`telegram.oss_summary`) |
+| `security` | `notify_security_alerts` / `notify_security_summary` — security findings batch + summary (`telegram.security_summary`) |
 
 ### Delivery Behavior
 
@@ -485,7 +487,7 @@ is interpolated into a shell command, and no business logic lives in YAML.
 | `monitoring.yml` | `0 */2 * * *` | `monitoring` | CI failures + security alerts |
 | `weekly-report.yml` | `0 9 * * 1` | `weekly-report` | Personal activity report |
 | `oss-hunter.yml` | `0 10 * * *` | `oss-hunt` | OSS opportunity discovery |
-| `security.yml` | `0 6 * * *` | `security` | Dependabot + code scanning |
+| `security.yml` | `0 6 * * *` | `security` | Dependabot + code scanning radar, at-least-once alerts, summary |
 | `manual.yml` | on demand | any | `workflow_dispatch` with a `choice` job input |
 
 All six also support manual dispatch. Every job has a 25-minute timeout.
@@ -585,6 +587,7 @@ or contacts GitHub.
 | `core/models.py` | 24 | State models, validation, serialization |
 | `core/rate_limit.py` | 17 | Tracker, headers, backoff |
 | `core/dispatcher.py` | 7 | Job registration, execution |
+| `core/dispatcher.py` (CLI) | 24 | Exit codes, env-var job selection, module + `run_local.py` entry points |
 | `github/auth.py` | 15 | Token resolution, AuthConfig |
 | `github/client.py` | 16 | GET-only, retry, pagination, ETags |
 | `github/models.py` | 19 | 8 dataclasses, from_api, to_dict |
@@ -594,7 +597,7 @@ or contacts GitHub.
 | `monitors/release.py` | 12 | Release event evaluation, prerelease/draft filtering |
 | `monitors/endpoint.py` | 26 | Security validation, config parsing, URL checks |
 | `monitors/__init__.py` | 16 | Registry, event dispatch, summary |
-| `monitors/monitor.py` | 14 | MonitorResult model, classification, properties |
+| `monitors/monitor.py` | 15 | MonitorResult model, classification, properties, SECURITY category |
 | `monitors/*` (properties) | 5 | Property tests for MonitorResult invariants |
 | `utils/text.py` | 23 | MarkdownV2 escaping, split, truncate |
 | `utils/time.py` | 16 | Timestamps, relative time |
@@ -608,16 +611,18 @@ or contacts GitHub.
 | `developer/activity.py` | 38 | Activity extraction, filtering, dedup, data quality |
 | `developer/statistics.py` | 21 | Counts, repo breakdown, periods, active days |
 | `developer/reports.py` | 16 | Report generation, periods, formatting |
-| `notifications/telegram.py` (config) | 46 | Token resolution, config validation, chat routing, summary toggles |
+| `notifications/telegram.py` (config) | 48 | Token resolution, config validation, chat routing, summary toggles |
 | `notifications/telegram.py` (transport) | 40 | Send, 4xx/5xx, retries, Retry-After, token safety |
 | `notifications/telegram.py` (formatters) | 47 | Escaping, splitting, long messages, determinism |
 | `notifications/telegram.py` (notifier) | 33 | Routing, failure isolation, safe skipping |
 | `notifications/telegram.py` (summaries) | 11 | Run/oss summary formatting, toggles, delivery isolation |
-| `core/dispatcher.py` (CLI) | 24 | Exit codes, env-var job selection, module + `run_local.py` entry points |
-| `jobs/jobs.py` | 44 | Six jobs, dispatch, partial failure, delivery isolation, OSS dedup |
+| `intelligence/security/*` | 24 | Severity ranks, findings, radar, report shape |
+| `monitors/security.py` | 17 | Alert evaluation, registry wiring, disabled/error paths |
+| `notifications/security report` | 15 | Security formatters, toggles, topic routing, isolation |
+| `jobs/jobs.py` | 50 | Six jobs, dispatch, partial failure, delivery isolation, OSS + security dedup |
 | `jobs/*` (architecture) | 17 | Dependency direction, no HTTP/LLM/eval in the job layer |
 | `.github/workflows/*` | 220 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
-| **Total** | **1084** | |
+| **Total** | **1150** | |
 
 ## Project Structure
 
@@ -632,11 +637,12 @@ gh-ops/
 │   │   └── collectors/ # Thin data-fetching wrappers
 │   ├── intelligence/   # OSS hunter, release/security radars
 │   ├── developer/      # Personal activity, statistics, reports
-│   ├── monitors/       # Repository, CI, release, endpoint monitors
+│   ├── monitors/       # Repository, CI, release, security, endpoint monitors
 │   │   ├── __init__.py # Monitor registry and evaluator
 │   │   ├── repository.py # Repository metadata monitoring
 │   │   ├── ci.py       # CI/workflow failure/recovery detection
 │   │   ├── release.py  # Release event monitoring
+│   │   ├── security.py # Security alert change evaluation
 │   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
 │   ├── notifications/  # Outbound Telegram delivery (Phase 7)
 │   ├── jobs/           # Thin job orchestration for Actions (Phase 8)

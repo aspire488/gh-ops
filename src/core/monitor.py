@@ -39,6 +39,7 @@ class MonitorCategory(str, Enum):
     CI = "ci"
     RELEASE = "release"
     ENDPOINT = "endpoint"
+    SECURITY = "security"
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,7 @@ telegram:
   enabled: true
   run_summary: true
   oss_summary: true
+  security_summary: true
   # The bot token is read from this environment variable ONLY.
   # Never put the token in this file.
   bot_token_ref: "TELEGRAM_BOT_TOKEN"
@@ -13,8 +14,10 @@ telegram:
         - developer_report
         - run_summary
         - oss_summary
+        - security
   # A chat with no `topics` receives every topic.
-  # Topics: alerts, oss_opportunities, developer_report, run_summary, oss_summary
+  # Topics: alerts, oss_opportunities, developer_report, run_summary,
+  #         oss_summary, security
 
   message:
     max_length: 4096

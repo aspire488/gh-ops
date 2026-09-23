@@ -22,6 +22,7 @@ from src.notifications.telegram import (
     TOPIC_OSS_OPPORTUNITIES,
     TOPIC_OSS_SUMMARY,
     TOPIC_RUN_SUMMARY,
+    TOPIC_SECURITY,
     # Configuration
     ChatTarget,
     # Delivery
@@ -42,6 +43,8 @@ from src.notifications.telegram import (
     format_oss_opportunities,
     format_oss_run_summary,
     format_run_summary,
+    format_security_alerts,
+    format_security_summary,
     has_telegram_token,
     load_telegram_config,
     notify_developer_report,
@@ -49,6 +52,8 @@ from src.notifications.telegram import (
     notify_oss_opportunities,
     notify_oss_run_summary,
     notify_run_summary,
+    notify_security_alerts,
+    notify_security_summary,
     resolve_telegram_token,
     # Entry points
     send_notification,
@@ -75,6 +80,8 @@ __all__ = [
     "format_oss_opportunities",
     "format_oss_run_summary",
     "format_run_summary",
+    "format_security_alerts",
+    "format_security_summary",
     # Entry points
     "send_notification",
     "notify_developer_report",
@@ -82,6 +89,8 @@ __all__ = [
     "notify_oss_opportunities",
     "notify_oss_run_summary",
     "notify_run_summary",
+    "notify_security_alerts",
+    "notify_security_summary",
     # Summaries
     "OssRunSummary",
     "RunSummary",
@@ -91,4 +100,5 @@ __all__ = [
     "TOPIC_OSS_OPPORTUNITIES",
     "TOPIC_OSS_SUMMARY",
     "TOPIC_RUN_SUMMARY",
+    "TOPIC_SECURITY",
 ]

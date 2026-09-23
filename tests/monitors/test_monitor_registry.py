@@ -1,5 +1,4 @@
 """Tests for src.monitors.__init__ (Phase 4 monitor registry)."""
-import pytest
 from src.core.models import (
     CurrentState,
     EventType,
@@ -8,10 +7,10 @@ from src.core.models import (
 )
 from src.core.monitor import MonitorCategory, MonitorStatus
 from src.monitors import (
+    _collector_to_monitor,
     evaluate_events,
     run_monitors,
     summarize_results,
-    _collector_to_monitor,
 )
 
 
@@ -56,6 +55,9 @@ class TestCollectorToMonitor:
 
     def test_workflows_maps_to_ci(self):
         assert _collector_to_monitor("workflows") == "ci"
+
+    def test_security_maps_to_security(self):
+        assert _collector_to_monitor("security") == "security"
 
     def test_unknown_maps_to_self(self):
         assert _collector_to_monitor("unknown") == "unknown"

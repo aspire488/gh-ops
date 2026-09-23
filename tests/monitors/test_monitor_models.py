@@ -1,12 +1,13 @@
 """Tests for src.core.monitor (Phase 4 monitor result model)."""
 import pytest
+
+from src.core.models import FieldChange
 from src.core.monitor import (
     MonitorCategory,
     MonitorResult,
     MonitorStatus,
     classify_changes_as_alert,
 )
-from src.core.models import FieldChange
 
 
 class TestMonitorStatus:
@@ -31,9 +32,10 @@ class TestMonitorCategory:
         assert MonitorCategory.CI.value == "ci"
         assert MonitorCategory.RELEASE.value == "release"
         assert MonitorCategory.ENDPOINT.value == "endpoint"
+        assert MonitorCategory.SECURITY.value == "security"
 
     def test_category_all_members(self):
-        assert len(MonitorCategory) == 4
+        assert len(MonitorCategory) == 5
 
 
 class TestMonitorResult:

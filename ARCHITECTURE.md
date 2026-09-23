@@ -133,7 +133,8 @@ gh-ops/
 │   │   │   └── radar.py          # Release tracking + alerts
 │   │   ├── security/
 │   │   │   ├── __init__.py
-│   │   │   └── radar.py          # Security advisory monitoring
+│   │   │   ├── models.py           # Severity ranks, SecurityFinding/Report
+│   │   │   └── radar.py            # Security advisory radar + alert config
 │   │   └── discovery/
 │   │       ├── __init__.py
 │   │       └── repos.py          # Repository discovery by criteria
@@ -149,6 +150,7 @@ gh-ops/
 │   │   ├── repository.py         # Stars, forks, issues, PRs, activity
 │   │   ├── ci.py                 # Workflow health, repeated failures
 │   │   ├── release.py            # New release detection
+│   │   ├── security.py           # Security alert change evaluation
 │   │   └── endpoint.py           # Generic URL/API health checks
 │   │
 │   ├── notifications/
@@ -703,6 +705,16 @@ The system does NOT limit itself to `good first issue` / `help wanted`. Those ar
 - The job participates in the shared `gh-ops-state` cache like every other
   state-writing workflow
 
+**Security intelligence dedup:**
+
+- Findings live under the `security` resource key; delivery markers under
+  `security_notified`, keyed by `owner/repo/{dependabot|codescan}/{id}`
+- Only actionable severities (default `critical`, `high`, from
+  `monitoring.monitors.security.alert_severities`) are batch-delivered
+- Markers are written only after `delivery.ok`; a failed batch is retried next run
+- The security job also emits an optional completion summary when
+  `telegram.security_summary` is true
+
 ---
 
 ## H. GitHub Actions Architecture
@@ -749,7 +761,7 @@ The six jobs, one per workflow:
 | `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
 | `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
 | `oss-hunt` | — | Phase 5 hunter + dedup delivery + OSS summary | yes (`oss_opportunities` key) |
-| `security` | security | — | yes |
+| `security` | security | Security Intelligence radar + at-least-once alerts + summary | yes (`security`, `security_notified` keys) |
 | `status` | — | read-only state/config report | no |
 
 `jobs.py` and `pipeline.py` contain **no business logic**: no scoring, no
@@ -870,6 +882,10 @@ persisted state would discard that update.
 `oss-hunter.yml` **is** in the group: the hunter job reads and writes the
 `oss_opportunities` resource key in Phase 3 state for cross-run notification
 dedup, so it must serialize with every other state writer.
+
+`security.yml` **is** in the group for the same reason: the security job reads
+and writes the `security_notified` resource key for at-least-once delivery of
+actionable findings.
 
 ### Known Limitations of the Actions Layer
 
@@ -1032,6 +1048,7 @@ data/history/
     "releases":  { "owner/name@v1.2.3": { "...": "..." } },
     "workflows": { "owner/name/run/123": { "...": "..." } },
     "security":  { "owner/name/dependabot/9": { "...": "..." } },
+    "security_notified": { "owner/name/dependabot/9": { "notified": true } },
     "user":      { "login": { "...": "..." } }
   },
   "etags": { "collector": "etag-value" },
@@ -1788,6 +1805,7 @@ accepts no inbound control, and calls no LLM, agent, MCP, or UEA runtime.
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
 | `run_summary` | `notify_run_summary` — daily/monitoring completion summary (toggle: `telegram.run_summary`) |
 | `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (toggle: `telegram.oss_summary`) |
+| `security` | `notify_security_alerts` / `notify_security_summary` — security job findings (summary toggle: `telegram.security_summary`) |
 
 A chat target with no `topics` receives every topic. Chats are served in
 configured order.
@@ -1875,6 +1893,7 @@ Implemented:
 - [x] State caching strategy — shared restore prefix, fresh immutable save key
 - [x] Secret handling audit — `GITHUB_TOKEN` / `TELEGRAM_BOT_TOKEN` via Actions Secrets, env only
 - [x] Tests: 288 (job dispatch, CLI exit codes, architecture boundary, workflow validation)
+- [x] `ci.yml` — repo CI (lint/mypy/test); state-free, does not dispatch gh-ops jobs
 
 #### Execution Model
 
@@ -1905,7 +1924,7 @@ already own; anything else would duplicate an existing layer.
 | `monitoring` | workflows, security | Phase 4 monitors + alerts | yes |
 | `weekly-report` | user, issues, pulls | Phase 6 activity → `DeveloperReport` | yes |
 | `oss-hunt` | — | Phase 5 hunter + dedup delivery + OSS summary | yes (`oss_opportunities` key) |
-| `security` | security | — | yes |
+| `security` | security | Security Intelligence radar + at-least-once alerts + summary | yes (`security`, `security_notified` keys) |
 | `status` | — | read-only state/config report | no |
 
 #### Failure Semantics
@@ -1933,13 +1952,33 @@ Documented limitations: 7-day idle eviction, cache growth inside a 10 GB LRU
 pool, concurrency queue depth, and Dependabot alerts potentially being refused by
 `GITHUB_TOKEN`. See §H, "Known Limitations of the Actions Layer".
 
-**Total: 1084/1084 passing**
+**Total: 1084/1084 passing** (at end of Phase 8; Security Intelligence batch brought the suite to 1150/1150)
 
 **Verification:** static workflow validation, architecture boundary tests, and
 subprocess exit-code tests. `ruff` was run over the files changed in this batch
 and is clean for those paths. `mypy` is a declared dev dependency but was not
 installed in the working environment, so that check was not run and is not
 claimed to have passed.
+
+### Security Intelligence Batch ✅ COMPLETE
+
+**Goal:** Finish the security subsystem beyond collection: intelligence,
+monitoring, Telegram delivery, config, and at-least-once state.
+
+Implemented:
+- [x] `src/intelligence/security/models.py` — severity ranks, `SecurityFinding`, `SecurityReport`, identity parsing
+- [x] `src/intelligence/security/radar.py` — `RadarConfig`, `analyze_security`, `SECURITY_RESOURCE_KEY` / `SECURITY_NOTIFIED_KEY`
+- [x] `src/monitors/security.py` — NEW open actionable → ALERT; REMOVED/CHANGED semantics; collection failure → ERROR
+- [x] `MonitorCategory.SECURITY` + registry wiring (`_collector_to_monitor("security") → "security"`, run order includes security)
+- [x] Telegram `TOPIC_SECURITY`, `format_security_alerts` / `format_security_summary`, `notify_security_*` (+ `telegram.security_summary` toggle)
+- [x] `job_security` — collect → radar → deliver new actionable (mark on `delivery.ok` only) → persist `security_notified` → optional summary
+- [x] `config/monitoring.yml` `monitors.security` block; `config/telegram.yml` `security_summary` + `security` topic
+- [x] Tests: radar/models, monitor, Telegram security report, rewritten `TestSecurityJob` (64 security-focused tests in this batch)
+
+**Total: 1150/1150 passing**
+
+**Verification:** full suite green; ruff clean on all batch-touched paths (only
+the 2 pre-existing findings in `tests/ci/test_workflows.py` remain).
 
 ### Phase 9 — Security Hardening
 

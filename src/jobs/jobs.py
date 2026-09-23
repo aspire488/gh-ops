@@ -26,6 +26,11 @@ from src.developer.activity import extract_activity
 from src.developer.reports import generate_report
 from src.github.client import GitHubClient
 from src.intelligence.oss.hunter import HunterConfig, run_hunter
+from src.intelligence.security import (
+    SECURITY_NOTIFIED_KEY,
+    RadarConfig,
+    analyze_security,
+)
 from src.jobs.pipeline import (
     apply_and_diff,
     authenticated_username,
@@ -49,6 +54,8 @@ from src.notifications.telegram import (
     notify_oss_opportunities,
     notify_oss_run_summary,
     notify_run_summary,
+    notify_security_alerts,
+    notify_security_summary,
 )
 from src.utils.logging import get_logger
 
@@ -335,6 +342,36 @@ def _state_with_notified_oss(state: CurrentState, identities: set[str]) -> Curre
     )
 
 
+def _state_with_notified_security(state: CurrentState, identities: set[str]) -> CurrentState:
+    """Return state with ``security_notified`` updated.
+
+    Preserves every other resource type so a concurrent snapshot is not
+    discarded (same partial-update discipline as Phase 3 / OSS dedup).
+    """
+    resources = dict(state.resources)
+    resources[SECURITY_NOTIFIED_KEY] = {
+        identity: {"notified": True} for identity in sorted(identities)
+    }
+    return CurrentState(
+        resources=resources,
+        etags=state.etags,
+        update_log=state.update_log,
+        last_updated=state.last_updated,
+        schema_version=state.schema_version,
+    )
+
+
+def _security_radar_config(config: Any) -> RadarConfig:
+    """Radar/monitor configuration from the runtime config mapping."""
+    monitoring = config.get("monitoring") if hasattr(config, "get") else None
+    if isinstance(monitoring, dict):
+        monitors = monitoring.get("monitors") or {}
+        section = monitors.get("security") or {}
+        if isinstance(section, dict):
+            return RadarConfig.from_dict(section)
+    return RadarConfig()
+
+
 def job_oss_hunt(**kwargs: Any) -> JobResult:
     """OSS opportunity discovery, scoring, and delivery.
 
@@ -429,18 +466,68 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
 
 
 def job_security(**kwargs: Any) -> JobResult:
-    """Dependabot and code-scanning alert collection."""
-    failure, _config, state, _snapshot, _events = _collect_and_persist(JOB_SECURITY, ("security",))
+    """Dependabot and code-scanning intelligence, alerts, and summary.
+
+    Collects security alerts into Phase 3 state, analyzes them with the
+    Security Intelligence radar, delivers only actionable findings that have
+    not been successfully notified before (at-least-once under the
+    ``security_notified`` resource key), then optionally sends a factual
+    security summary when ``telegram.security_summary`` is enabled.
+    """
+    failure, config, state, _snapshot, _events = _collect_and_persist(
+        JOB_SECURITY, ("security",)
+    )
     if failure is not None:
         return failure
 
-    alerts = state.resources.get("security", {})
+    radar = _security_radar_config(config)
+    report = analyze_security(state, radar)
+
+    notified = set(state.resources.get(SECURITY_NOTIFIED_KEY, {}) or {})
+    new_actionable = [
+        finding for finding in report.actionable if finding.identity not in notified
+    ]
+
+    # Exactly one batch delivery per run, even when the list is empty (the
+    # formatter emits nothing and the notifier reports "nothing to send").
+    delivery = _safe_notify(
+        JOB_SECURITY,
+        lambda: notify_security_alerts(new_actionable, config=config),
+    )
+    if delivery is not None and delivery.ok:
+        notified.update(finding.identity for finding in new_actionable)
+    elif delivery is None:
+        logger.warning("%s: security alert delivery raised; not marking identities", JOB_SECURITY)
+    elif not delivery.ok:
+        logger.warning(
+            "%s: security alert delivery failed; not marking identities (%s)",
+            JOB_SECURITY,
+            delivery.failed_chats,
+        )
+
+    try:
+        persist_state(_state_with_notified_security(state, notified))
+    except Exception as exc:
+        return _fatal(JOB_SECURITY, ErrorCode.STATE_SAVE_FAILED, "Could not persist state", exc)
+
+    summary_delivery = _safe_notify(
+        JOB_SECURITY,
+        lambda: notify_security_summary(report, config=config),
+    )
+
     return JobResult(
         job=JOB_SECURITY,
         success=True,
         data={
             "state": state_summary(state),
-            "alerts": len(alerts),
+            "alerts": report.total,
+            "open_alerts": report.open_count,
+            "actionable": report.actionable_count,
+            "new_actionable": len(new_actionable),
+            "by_severity": dict(report.by_severity),
+            "report": report.to_dict(),
+            **_notification_data(delivery),
+            "security_summary_notification": _notification_data(summary_delivery)["notification"],
         },
     )
 

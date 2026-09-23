@@ -539,6 +539,24 @@ class TestOssHuntJob:
 
 
 class TestSecurityJob:
+    @pytest.fixture(autouse=True)
+    def _mock_security_notify(self, monkeypatch: pytest.MonkeyPatch):
+        """Record security deliveries; never touch Telegram."""
+        deliveries: list = []
+        summaries: list = []
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_security_alerts",
+            lambda findings, **kw: (deliveries.append(list(findings)), _result_ok())[1],
+        )
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_security_summary",
+            lambda report, **kw: (summaries.append(report), _result_ok())[1],
+        )
+        self.deliveries = deliveries
+        self.summaries = summaries
+
     def test_counts_alerts_from_state(self, pipeline):
         pipeline["items"] = {
             "security": {"octo/repo/dependabot/1": {"id": 1, "state": "open"}}
@@ -551,6 +569,91 @@ class TestSecurityJob:
         jobs_module.job_security()
         collected = [c for c in pipeline["calls"] if isinstance(c, tuple)]
         assert collected == [("build_snapshot", ("security",))]
+
+    def test_delivers_new_actionable_and_marks_notified(self, pipeline):
+        pipeline["items"] = {
+            "security": {
+                "octo/repo/dependabot/1": {
+                    "severity": "critical",
+                    "state": "open",
+                    "package_name": "lodash",
+                    "summary": "bad",
+                }
+            }
+        }
+        result = jobs_module.job_security()
+        assert result.success is True
+        assert result.data["actionable"] == 1
+        assert result.data["new_actionable"] == 1
+        assert len(self.deliveries) == 1
+        assert [f.identity for f in self.deliveries[0]] == ["octo/repo/dependabot/1"]
+        assert pipeline["persisted"] is not None
+        assert "octo/repo/dependabot/1" in pipeline["persisted"].resources["security_notified"]
+
+    def test_new_actionable_skipped_when_previously_notified(self, pipeline, monkeypatch):
+        from src.core.models import CurrentState
+
+        previous = CurrentState(resources={
+            "security": {},
+            "security_notified": {"octo/repo/dependabot/1": {"notified": True}},
+        })
+        monkeypatch.setattr(jobs_module, "load_previous_state", lambda: previous)
+        pipeline["items"] = {
+            "security": {
+                "octo/repo/dependabot/1": {"severity": "critical", "state": "open"}
+            }
+        }
+        result = jobs_module.job_security()
+        assert result.success is True
+        assert result.data["actionable"] == 1
+        assert result.data["new_actionable"] == 0
+        assert self.deliveries == [[]]
+
+    def test_failed_delivery_does_not_mark_notified(self, pipeline, monkeypatch):
+        monkeypatch.setattr(
+            jobs_module, "notify_security_alerts", lambda findings, **kw: _result_failed()
+        )
+        pipeline["items"] = {
+            "security": {
+                "octo/repo/dependabot/1": {"severity": "critical", "state": "open"}
+            }
+        }
+        result = jobs_module.job_security()
+        assert result.success is True
+        notified = pipeline["persisted"].resources.get("security_notified", {})
+        assert "octo/repo/dependabot/1" not in notified
+
+    def test_raising_delivery_does_not_fail_job(self, pipeline, monkeypatch):
+        def boom(findings, **kw):
+            raise RuntimeError("telegram exploded")
+
+        monkeypatch.setattr(jobs_module, "notify_security_alerts", boom)
+        pipeline["items"] = {
+            "security": {
+                "octo/repo/dependabot/1": {"severity": "critical", "state": "open"}
+            }
+        }
+        result = jobs_module.job_security()
+        assert result.success is True
+        assert "persist_state" in pipeline["calls"]
+
+    def test_summary_delivery_is_reported(self, pipeline):
+        pipeline["items"] = {
+            "security": {"octo/repo/dependabot/1": {"severity": "low", "state": "open"}}
+        }
+        result = jobs_module.job_security()
+        assert result.success is True
+        assert len(self.summaries) == 1
+        assert "security_summary_notification" in result.data
+        assert result.data["by_severity"] == {"low": 1}
+
+    def test_fatal_when_state_unreadable(self, pipeline, monkeypatch):
+        def boom():
+            raise RuntimeError("unreadable")
+
+        monkeypatch.setattr(jobs_module, "load_previous_state", boom)
+        result = jobs_module.job_security()
+        assert result.success is False
 
 
 class TestStatusJob:

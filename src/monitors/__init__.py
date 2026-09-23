@@ -11,12 +11,11 @@ Architecture:
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from src.core.events import events_by_resource_type, events_by_event_type
 from src.core.models import (
     CurrentState,
-    EventType,
     ResourceEvent,
 )
 from src.core.monitor import MonitorCategory, MonitorResult, MonitorStatus
@@ -24,6 +23,7 @@ from src.monitors.ci import evaluate_workflow_event, monitor_ci
 from src.monitors.endpoint import monitor_endpoints
 from src.monitors.release import evaluate_release_event, monitor_releases
 from src.monitors.repository import evaluate_repository_event, monitor_repositories
+from src.monitors.security import evaluate_security_event, monitor_security
 from src.utils.logging import get_logger
 
 logger = get_logger("monitors.registry")
@@ -33,6 +33,7 @@ _EVENT_EVALUATORS: dict[str, Callable[[ResourceEvent, dict[str, Any]], MonitorRe
     "repos": evaluate_repository_event,
     "workflows": evaluate_workflow_event,
     "releases": evaluate_release_event,
+    "security": evaluate_security_event,
 }
 
 # Map monitor names to their batch evaluation functions
@@ -41,6 +42,7 @@ _MONITOR_FUNCTIONS: dict[str, Callable[[CurrentState, dict[str, Any]], list[Moni
     "ci": monitor_ci,
     "release": monitor_releases,
     "endpoint": monitor_endpoints,
+    "security": monitor_security,
 }
 
 
@@ -107,9 +109,9 @@ def run_monitors(
     all_results: list[MonitorResult] = []
 
     # Run monitors in deterministic order
-    for name in ("repository", "ci", "release", "endpoint"):
+    for name in ("repository", "ci", "release", "security", "endpoint"):
         m_config = monitor_config.get(name, {})
-        if not m_config.get("enabled", False if name == "endpoint" else True):
+        if not m_config.get("enabled", name != "endpoint"):
             continue
 
         monitor_fn = _MONITOR_FUNCTIONS.get(name)
@@ -212,7 +214,7 @@ def _collector_to_monitor(collector: str) -> str:
         "pulls": "repository",
         "releases": "release",
         "workflows": "ci",
-        "security": "repository",
+        "security": "security",
         "user": "repository",
     }
     return mapping.get(collector, collector)

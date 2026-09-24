@@ -48,6 +48,15 @@ class TestFormatSecurityAlerts:
         # Index prefix is MarkdownV2-escaped as "1\."
         assert "1\\." in message
 
+    def test_title_and_severity_emoji_follow_product_contract(self):
+        message = format_security_alerts([_finding()])[0]
+        assert f"*{esc('🔴 GH-OPS · SECURITY (1)')}*" in message
+        assert f"1\\. {esc('🔴 [CRITICAL]')}" in message
+
+    def test_medium_severity_uses_important_emoji(self):
+        message = format_security_alerts([_finding(severity="medium")])[0]
+        assert esc("🟠 [MEDIUM]") in message
+
     def test_untrusted_text_is_escaped(self):
         finding = _finding(summary="evil *bold* [link](http://x)")
         message = format_security_alerts([finding])[0]

@@ -21,6 +21,7 @@ from src.notifications.telegram import (
     notify_oss_opportunities,
     send_notification,
 )
+from src.utils.text import escape_markdown_v2 as esc
 from tests.notifications._fakes import (
     TEST_CHAT_ID,
     TEST_TOKEN,
@@ -316,7 +317,7 @@ class TestConvenienceEntryPoints:
         )
         assert result.topic == "alerts"
         assert result.sent == 1
-        assert "MONITORING" in transport.sent[0][1]
+        assert esc("GH-OPS · CI") in transport.sent[0][1]
 
     def test_notify_monitor_alerts_with_nothing_to_report(self):
         transport = FakeTransport()

@@ -8,6 +8,7 @@ from src.notifications.telegram import (
     format_oss_run_summary,
     notify_oss_run_summary,
 )
+from src.utils.text import escape_markdown_v2 as esc
 from tests.notifications._fakes import FakeTransport
 
 
@@ -24,11 +25,16 @@ def test_formats_actual_counts_deterministically():
     assert "Duplicates: 1" in message
 
 
-def test_zero_opportunities_includes_empty_note():
-    from src.utils.text import escape_markdown_v2
+def test_title_follows_product_language():
+    message = format_oss_run_summary(_summary())[0]
+    assert f"*{esc('🔵 GH-OPS · OSS HUNTER')}*" in message
+    assert "OSS Hunter Complete" not in message
+    assert "No new qualifying opportunities found." not in message
 
+
+def test_zero_opportunities_omits_forbidden_empty_note():
     message = format_oss_run_summary(_summary(opportunities=0))[0]
-    assert escape_markdown_v2("No new qualifying opportunities found.") in message
+    assert "No new qualifying opportunities found." not in message
     assert "Opportunities: 0" in message
 
 

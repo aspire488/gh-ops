@@ -6,8 +6,9 @@ api.telegram.org, and no live token is ever required.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any
 
 # A syntactically realistic bot token. Never leaves the test process.
 TEST_TOKEN = "123456789:AAFakeTokenValueForTestsOnly_abcdefghij"
@@ -195,6 +196,7 @@ def make_monitor_result(
     resource: str = "octo/example",
     summary: str = "workflow failed",
     category: Any = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Any:
     """Build a real MonitorResult."""
     from src.core.monitor import MonitorCategory, MonitorResult, MonitorStatus
@@ -205,6 +207,7 @@ def make_monitor_result(
         status=status if isinstance(status, MonitorStatus) else MonitorStatus(status),
         summary=summary,
         category=category if category is not None else MonitorCategory.CI,
+        metadata=dict(metadata or {}),
         evaluated_at="2025-01-15T00:00:00+00:00",
     )
 

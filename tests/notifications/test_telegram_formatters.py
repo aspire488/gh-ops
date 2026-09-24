@@ -145,7 +145,22 @@ class TestMonitorAlerts:
             make_monitor_result(MonitorStatus.ALERT),
             make_monitor_result(MonitorStatus.ERROR),
         ]
-        assert f"*{esc('🟠 GH-OPS · MONITORING')}*" in format_monitor_alerts(results)[0]
+        assert f"*{esc('🟠 GH-OPS · CI')}*" in format_monitor_alerts(results)[0]
+
+    def test_single_subsystem_uses_that_subsystems_label(self):
+        release = make_monitor_result(
+            MonitorStatus.ALERT, monitor="release", summary="new tag"
+        )
+        message = format_monitor_alerts([release])[0]
+        assert f"*{esc('🟠 GH-OPS · RELEASE')}*" in message
+
+    def test_mixed_subsystems_fall_back_to_monitoring(self):
+        results = [
+            make_monitor_result(MonitorStatus.ALERT, monitor="ci"),
+            make_monitor_result(MonitorStatus.ALERT, monitor="release"),
+        ]
+        message = format_monitor_alerts(results)[0]
+        assert f"*{esc('🟠 GH-OPS · MONITORING')}*" in message
 
     def test_includes_resource_and_summary(self):
         result = make_monitor_result(
@@ -154,7 +169,7 @@ class TestMonitorAlerts:
         message = format_monitor_alerts([result])[0]
         assert "octo/example" in message
         assert "new tag" in message
-        assert f"*{esc('🟠 GH-OPS · MONITORING')}*" in message
+        assert f"*{esc('🟠 GH-OPS · RELEASE')}*" in message
 
     def test_input_order_is_preserved(self):
         results = [
@@ -195,12 +210,12 @@ class TestOssOpportunities:
     def test_limit_is_reported_in_the_title(self):
         items = [make_opportunity(issue_number=n, issue_id=10000 + n) for n in range(1, 6)]
         message = format_oss_opportunities(items, limit=2)[0]
-        assert f"*{esc('gh-ops OSS opportunities (2)')}*" in message
+        assert f"*{esc('🔵 GH-OPS · OSS OPPORTUNITIES (2)')}*" in message
 
     def test_negative_limit_means_no_limit(self):
         items = [make_opportunity(issue_number=n, issue_id=10000 + n) for n in range(1, 13)]
         message = format_oss_opportunities(items, limit=-1)[0]
-        assert f"*{esc('gh-ops OSS opportunities (12)')}*" in message
+        assert f"*{esc('🔵 GH-OPS · OSS OPPORTUNITIES (12)')}*" in message
 
     def test_empty_input_returns_no_messages(self):
         assert format_oss_opportunities([]) == []
@@ -238,7 +253,7 @@ class TestOssOpportunities:
 class TestDeveloperReportFormatting:
     def test_reuses_the_phase6_summary(self):
         message = format_developer_report(make_developer_report())[0]
-        assert f"*{esc('gh-ops developer report')}*" in message
+        assert f"*{esc('🔵 GH-OPS · DEVELOPER')}*" in message
         assert "Total activities: 0" in message
         assert "Active days" in message
 
@@ -290,8 +305,8 @@ class TestMessageSplitting:
         ]
         messages = format_oss_opportunities(items, limit=-1, max_length=500)
         assert len(messages) > 1
-        assert messages[0].startswith(f"*{esc('gh-ops OSS opportunities (39)')}*")
-        assert all(esc("gh-ops OSS opportunities") not in m for m in messages[1:])
+        assert messages[0].startswith(f"*{esc('🔵 GH-OPS · OSS OPPORTUNITIES (39)')}*")
+        assert all(esc("OSS OPPORTUNITIES") not in m for m in messages[1:])
 
     def test_packaging_is_dense(self):
         """Blocks should be packed, not emitted one message per block."""

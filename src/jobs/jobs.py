@@ -312,8 +312,9 @@ def _deliver_monitoring_alerts(
     ]
     if retry:
         from src.reporting.builders import build_report as _build_report
+        from src.reporting.builders import report_name_for_events as _report_name_for_events
 
-        built = _build_report(retry, report_name="MONITORING")
+        built = _build_report(retry, report_name=_report_name_for_events(retry))
         if built is not None:
             title, blocks = built
             retry_delivery = _safe_notify(

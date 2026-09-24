@@ -52,7 +52,7 @@ from src.core.errors import ConfigError, ErrorCode, ErrorSeverity, GhOpsError
 from src.core.monitor import MonitorResult
 from src.core.rate_limit import calculate_backoff, parse_retry_after
 from src.developer.reports import DeveloperReport, format_summary
-from src.reporting.builders import build_report
+from src.reporting.builders import build_report, report_name_for_events
 from src.reporting.convert import report_event_from_monitor
 from src.utils.logging import get_logger
 from src.utils.text import escape_markdown_v2, split_message
@@ -546,7 +546,7 @@ def format_monitor_alerts(
     if not events:
         return []
 
-    built = build_report(events, report_name="MONITORING")
+    built = build_report(events, report_name=report_name_for_events(events))
     if built is None:
         return []
     title, blocks = built
@@ -642,7 +642,7 @@ def format_oss_opportunities(
         blocks.append("\n".join(stats_lines))
 
     return _compose_messages(
-        f"gh-ops OSS opportunities ({opportunity_count})",
+        f"🔵 GH-OPS · OSS OPPORTUNITIES ({opportunity_count})",
         blocks,
         max_length=max_length,
         separator=separator,
@@ -673,7 +673,7 @@ def format_developer_report(
         return []
 
     return _compose_messages(
-        "gh-ops developer report",
+        "🔵 GH-OPS · DEVELOPER",
         [body],
         max_length=max_length,
         separator=separator,
@@ -693,9 +693,13 @@ class RunSummary:
 
 
 def format_run_summary(summary: RunSummary, *, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH, separator: str = "\n\n") -> list[str]:
-    state = "persisted" if summary.state_persisted else "not persisted"
-    body = f"Run type: {summary.run_type}\nRepositories checked: {summary.repositories_checked}\nItems collected: {summary.items_collected}\nAlerts: {summary.alerts_generated}\nState: {state}"
-    return _compose_messages("GH-OPS Monitoring Complete", [body], max_length=max_length, separator=separator)
+    body = (
+        f"Run type: {summary.run_type}\n"
+        f"Repositories checked: {summary.repositories_checked}\n"
+        f"Items collected: {summary.items_collected}\n"
+        f"Notifications: {summary.alerts_generated}"
+    )
+    return _compose_messages("🔵 GH-OPS · MONITORING", [body], max_length=max_length, separator=separator)
 
 
 @dataclass(frozen=True)
@@ -707,10 +711,26 @@ class OssRunSummary:
 
 
 def format_oss_run_summary(summary: OssRunSummary, *, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH, separator: str = "\n\n") -> list[str]:
-    body = f"Queries: {summary.queries_run}\nResults: {summary.total_issues_found}\nOpportunities: {summary.opportunities}\nDuplicates: {summary.duplicates}"
-    if summary.opportunities == 0:
-        body += "\n\nNo new qualifying opportunities found."
-    return _compose_messages("GH-OPS · OSS Hunter Complete", [body], max_length=max_length, separator=separator)
+    body = (
+        f"Queries: {summary.queries_run}\n"
+        f"Results: {summary.total_issues_found}\n"
+        f"Opportunities: {summary.opportunities}\n"
+        f"Duplicates: {summary.duplicates}"
+    )
+    return _compose_messages("🔵 GH-OPS · OSS HUNTER", [body], max_length=max_length, separator=separator)
+
+
+#: Severity emoji for security finding headers (four-severity contract).
+_SECURITY_SEVERITY_EMOJI = {
+    "critical": "🔴",
+    "high": "🔴",
+    "medium": "🟠",
+    "low": "🔵",
+}
+
+
+def _security_severity_emoji(severity: str) -> str:
+    return _SECURITY_SEVERITY_EMOJI.get(severity.lower(), "🔵")
 
 
 def format_security_alerts(
@@ -747,7 +767,7 @@ def format_security_alerts(
         summary = str(getattr(finding, "summary", "") or "")
         html_url = str(getattr(finding, "html_url", "") or "")
 
-        header = f"{index}. [{severity}] {repository}"
+        header = f"{index}. {_security_severity_emoji(severity)} [{severity}] {repository}"
         if source:
             header = f"{header} ({source})"
         lines = [header]
@@ -760,7 +780,7 @@ def format_security_alerts(
         blocks.append("\n".join(lines))
 
     return _compose_messages(
-        f"gh-ops security alerts ({len(items)})",
+        f"🔴 GH-OPS · SECURITY ({len(items)})",
         blocks,
         max_length=max_length,
         separator=separator,

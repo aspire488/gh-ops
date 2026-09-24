@@ -15,6 +15,23 @@ from src.reporting.model import (
 )
 from src.utils.time import format_ist_coverage, format_ist_date, format_ist_datetime
 
+
+def report_name_for_events(events: Sequence[ReportEvent]) -> str:
+    """Title report name for a monitor batch.
+
+    A single-subsystem batch uses that subsystem's display label (CI, RELEASE,
+    REPO, ENDPOINT, SECURITY). Mixed or unknown batches fall back to MONITORING.
+    """
+    subsystems = {event.subsystem for event in events}
+    if len(subsystems) == 1:
+        only = next(iter(subsystems))
+        if only in SUBSYSTEM_LABEL:
+            return SUBSYSTEM_LABEL[only]
+        if only:
+            return only.upper()
+    return "MONITORING"
+
+
 #: Metadata keys rendered as one-line context under the title (in order).
 _CONTEXT_KEYS: tuple[str, ...] = (
     "branch",

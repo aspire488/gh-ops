@@ -18,11 +18,11 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
 | Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
 | Security Intelligence batch | ✅ Complete | 1150/1150 tests |
-| Product-hardening batch | ✅ Complete | 1219/1219 tests |
+| Reporting + product-hardening batch | ✅ Complete | 1260/1260 tests |
 
-**Total: 1219/1219 tests passing.**
+**Total: 1260/1260 tests passing.**
 
-Figures are cumulative as of the end of each phase (Security Intelligence and Product-hardening are post-Phase-8 batches).
+Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, and Telegram contract hardening are post-Phase-8 batches.
 
 ## Architecture
 

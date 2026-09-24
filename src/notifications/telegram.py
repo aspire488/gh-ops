@@ -49,9 +49,11 @@ from typing import Any
 import requests
 
 from src.core.errors import ConfigError, ErrorCode, ErrorSeverity, GhOpsError
-from src.core.monitor import MonitorResult, MonitorStatus
+from src.core.monitor import MonitorResult
 from src.core.rate_limit import calculate_backoff, parse_retry_after
 from src.developer.reports import DeveloperReport, format_summary
+from src.reporting.builders import build_report
+from src.reporting.convert import report_event_from_monitor
 from src.utils.logging import get_logger
 from src.utils.text import escape_markdown_v2, split_message
 
@@ -522,10 +524,11 @@ def format_monitor_alerts(
     max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
     separator: str = "\n\n",
 ) -> list[str]:
-    """Format monitor results for delivery.
+    """Format monitor results as a severity-segmented report.
 
-    Only ALERT and ERROR results are notifiable; OK / CHANGED / SKIPPED results
-    are not notifications. Input order is preserved.
+    Converts each notifiable MonitorResult into a ReportEvent, prioritizes by
+    severity, and renders via the shared report builder. Empty / non-notifiable
+    results produce no messages (no-op silence).
 
     Args:
         results: Monitor results.
@@ -535,23 +538,32 @@ def format_monitor_alerts(
     Returns:
         Messages, or an empty list when there is nothing to notify about.
     """
-    notifiable = [
-        r for r in results
-        if r.status in (MonitorStatus.ALERT, MonitorStatus.ERROR)
+    events = [
+        event
+        for result in results
+        if (event := report_event_from_monitor(result)) is not None
     ]
-    if not notifiable:
+    if not events:
         return []
 
-    blocks = [
-        f"[{r.status.value.upper()}] {r.monitor}: {r.resource}\n{r.summary}"
-        for r in notifiable
-    ]
-    return _compose_messages(
-        f"gh-ops monitor alerts ({len(notifiable)})",
-        blocks,
-        max_length=max_length,
-        separator=separator,
-    )
+    built = build_report(events, report_name="MONITORING")
+    if built is None:
+        return []
+    title, blocks = built
+    return _compose_messages(title, blocks, max_length=max_length, separator=separator)
+
+
+def format_report(
+    title: str,
+    blocks: Sequence[str],
+    *,
+    max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+    separator: str = "\n\n",
+) -> list[str]:
+    """Compose plain-text title + blocks into MarkdownV2 messages."""
+    if not title or not blocks:
+        return []
+    return _compose_messages(title, list(blocks), max_length=max_length, separator=separator)
 
 
 def _format_score(value: Any) -> str:
@@ -566,6 +578,7 @@ def format_oss_opportunities(
     opportunities: Any,
     *,
     limit: int = 10,
+    stats: Any = None,
     max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
     separator: str = "\n\n",
 ) -> list[str]:
@@ -580,6 +593,7 @@ def format_oss_opportunities(
         opportunities: A HunterResult (anything exposing ``.opportunities``) or a
             sequence of Opportunity-like objects.
         limit: Maximum number of opportunities to include. Negative means no limit.
+        stats: Optional OssRunSummary-like object appended when items exist.
         max_length: Maximum characters per message.
         separator: Preferred split point.
 
@@ -617,8 +631,18 @@ def format_oss_opportunities(
     if not blocks:
         return []
 
+    opportunity_count = len(blocks)
+    if stats is not None:
+        stats_lines = [
+            f"Queries: {int(getattr(stats, 'queries_run', 0) or 0)}",
+            f"Results: {int(getattr(stats, 'total_issues_found', 0) or 0)}",
+            f"Opportunities: {int(getattr(stats, 'opportunities', 0) or 0)}",
+            f"Duplicates: {int(getattr(stats, 'duplicates', 0) or 0)}",
+        ]
+        blocks.append("\n".join(stats_lines))
+
     return _compose_messages(
-        f"gh-ops OSS opportunities ({len(blocks)})",
+        f"gh-ops OSS opportunities ({opportunity_count})",
         blocks,
         max_length=max_length,
         separator=separator,
@@ -1284,19 +1308,46 @@ def notify_monitor_alerts(
     return notifier.send(messages, TOPIC_ALERTS)
 
 
+def notify_report(
+    title: str,
+    blocks: Sequence[str],
+    *,
+    topic: str,
+    config: Any = None,
+    transport: TelegramTransport | None = None,
+) -> NotificationResult:
+    """Deliver a pre-built report (title + plain-text blocks) to a topic."""
+    resolved = load_telegram_config(config)
+    if not title or not blocks:
+        return NotificationResult(
+            topic=topic,
+            skipped=True,
+            skip_reason="nothing to report",
+        )
+    messages = format_report(
+        title,
+        blocks,
+        max_length=resolved.max_length,
+        separator=resolved.split_separator,
+    )
+    return TelegramNotifier(resolved, transport=transport).send(messages, topic)
+
+
 def notify_oss_opportunities(
     opportunities: Any,
     *,
     limit: int = 10,
+    stats: Any = None,
     config: Any = None,
     transport: TelegramTransport | None = None,
 ) -> NotificationResult:
-    """Format and deliver OSS opportunities."""
+    """Format and deliver OSS opportunities (optionally with run stats)."""
     resolved = load_telegram_config(config)
     notifier = TelegramNotifier(resolved, transport=transport)
     messages = format_oss_opportunities(
         opportunities,
         limit=limit,
+        stats=stats,
         max_length=resolved.max_length,
         separator=resolved.split_separator,
     )

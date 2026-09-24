@@ -1,0 +1,91 @@
+"""Shared reporting and presentation layer for gh-ops.
+
+Domain subsystems produce structured ReportEvents. This package owns
+aggregation, deduplication, prioritization, ledger storage, and report
+building. Telegram delivery stays in ``src.notifications``.
+"""
+from src.reporting.aggregate import (
+    dedupe,
+    event_key,
+    group_by_severity,
+    prioritize,
+)
+from src.reporting.builders import (
+    build_daily_brief,
+    build_report,
+    build_weekly_brief,
+    event_block,
+)
+from src.reporting.convert import (
+    report_event_from_activity,
+    report_event_from_monitor,
+)
+from src.reporting.ledger import (
+    REPORTING_EVENTS_KEY,
+    events_for_brief,
+    events_in_window,
+    load_ledger,
+    mark_briefed,
+    mark_delivered,
+    merge_events,
+    prune_ledger,
+    state_with_ledger,
+    undelivered_events,
+)
+from src.reporting.model import (
+    SEVERITY_EMOJI,
+    SEVERITY_LABEL,
+    SEVERITY_ORDER,
+    SEVERITY_RANK,
+    SUBSYSTEM_CI,
+    SUBSYSTEM_DAILY,
+    SUBSYSTEM_DEVELOPER,
+    SUBSYSTEM_ENDPOINT,
+    SUBSYSTEM_MONITORING,
+    SUBSYSTEM_OSS,
+    SUBSYSTEM_RELEASE,
+    SUBSYSTEM_REPOSITORY,
+    SUBSYSTEM_SECURITY,
+    SUBSYSTEM_WEEKLY,
+    ReportEvent,
+    Severity,
+)
+
+__all__ = [
+    "ReportEvent",
+    "Severity",
+    "SEVERITY_ORDER",
+    "SEVERITY_RANK",
+    "SEVERITY_LABEL",
+    "SEVERITY_EMOJI",
+    "SUBSYSTEM_MONITORING",
+    "SUBSYSTEM_CI",
+    "SUBSYSTEM_RELEASE",
+    "SUBSYSTEM_REPOSITORY",
+    "SUBSYSTEM_ENDPOINT",
+    "SUBSYSTEM_SECURITY",
+    "SUBSYSTEM_OSS",
+    "SUBSYSTEM_DEVELOPER",
+    "SUBSYSTEM_DAILY",
+    "SUBSYSTEM_WEEKLY",
+    "event_key",
+    "dedupe",
+    "prioritize",
+    "group_by_severity",
+    "build_report",
+    "build_daily_brief",
+    "build_weekly_brief",
+    "event_block",
+    "report_event_from_monitor",
+    "report_event_from_activity",
+    "REPORTING_EVENTS_KEY",
+    "load_ledger",
+    "merge_events",
+    "mark_delivered",
+    "mark_briefed",
+    "undelivered_events",
+    "events_in_window",
+    "events_for_brief",
+    "prune_ledger",
+    "state_with_ledger",
+]

@@ -5,9 +5,8 @@ parsing GitHub API timestamps and formatting for display.
 """
 from __future__ import annotations
 
-import re
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 # ISO 8601 formats commonly used by GitHub API
 _GITHUB_FORMATS = [
@@ -17,10 +16,66 @@ _GITHUB_FORMATS = [
     "%Y-%m-%dT%H:%M:%S.%fZ",
 ]
 
+#: Fixed India Standard Time offset (UTC+5:30). No tzdata dependency.
+IST_TIMEZONE = timezone(timedelta(hours=5, minutes=30), name="IST")
+
 
 def now_utc() -> datetime:
     """Get the current UTC datetime."""
     return datetime.now(timezone.utc)
+
+
+def to_ist(dt: datetime) -> datetime:
+    """Convert a datetime to IST. Naive values are treated as UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST_TIMEZONE)
+
+
+def format_ist_datetime(dt: datetime) -> str:
+    """Format as ``Sep 23 · 20:42 IST`` (user-facing timestamps)."""
+    ist = to_ist(dt)
+    return f"{ist.strftime('%b %d')} · {ist.strftime('%H:%M')} IST"
+
+
+def format_ist_time(dt: datetime) -> str:
+    """Format as ``20:42 IST``."""
+    return f"{to_ist(dt).strftime('%H:%M')} IST"
+
+
+def format_ist_date(dt: datetime) -> str:
+    """Format as ``Sep 23``."""
+    return to_ist(dt).strftime("%b %d")
+
+
+def format_ist_coverage(start: datetime, end: datetime) -> str:
+    """Format a coverage window, e.g. ``09:00–21:00 IST`` or with dates."""
+    s, e = to_ist(start), to_ist(end)
+    if s.date() == e.date():
+        return f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')} IST"
+    return (
+        f"{s.strftime('%b %d · %H:%M')}–"
+        f"{e.strftime('%b %d · %H:%M')} IST"
+    )
+
+
+def parse_event_timestamp(value: Any) -> datetime | None:
+    """Best-effort parse of a ledger/event timestamp; None when unusable."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return parse_github_timestamp(text)
+    except (ValueError, TypeError):
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return None
 
 
 def parse_github_timestamp(ts: str) -> datetime:
@@ -124,7 +179,7 @@ def is_stale(timestamp: datetime, max_age_days: int) -> bool:
     return days_ago(timestamp) > max_age_days
 
 
-def start_of_day(dt: Optional[datetime] = None) -> datetime:
+def start_of_day(dt: datetime | None = None) -> datetime:
     """Get the start of day (00:00:00 UTC) for a given datetime.
 
     Args:
@@ -138,7 +193,7 @@ def start_of_day(dt: Optional[datetime] = None) -> datetime:
     return dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
 
 
-def end_of_day(dt: Optional[datetime] = None) -> datetime:
+def end_of_day(dt: datetime | None = None) -> datetime:
     """Get the end of day (23:59:59 UTC) for a given datetime.
 
     Args:

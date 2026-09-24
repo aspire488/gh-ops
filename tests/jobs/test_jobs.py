@@ -376,7 +376,7 @@ class TestOssHuntJob:
                 total_duplicates=3,
             ),
             "deliveries": [],
-            "summaries": [],
+            "stats": [],
             "result_ok": True,
         }
 
@@ -385,17 +385,15 @@ class TestOssHuntJob:
 
         def fake_notify_opps(opps, **kw):
             record["deliveries"].append(list(opps))
+            stats = kw.get("stats")
+            if stats is not None:
+                record["stats"].append(stats)
             if record["result_ok"]:
                 return _result_ok(topic="oss_opportunities")
             return _result_failed()
 
-        def fake_notify_summary(summary, **kw):
-            record["summaries"].append(summary)
-            return _result_ok(topic="oss_summary")
-
         monkeypatch.setattr(jobs_module, "run_hunter", fake_run_hunter)
         monkeypatch.setattr(jobs_module, "notify_oss_opportunities", fake_notify_opps)
-        monkeypatch.setattr(jobs_module, "notify_oss_run_summary", fake_notify_summary)
         record["opportunity"] = opp
         record["opportunity_two"] = opp_two
         return record
@@ -487,26 +485,25 @@ class TestOssHuntJob:
         result = jobs_module.job_oss_hunt()
         assert result.success is False
 
-    def test_sends_oss_summary_once_per_run(self, pipeline, oss_env):
+    def test_attaches_run_stats_once_per_run(self, pipeline, oss_env):
         result = jobs_module.job_oss_hunt()
         assert result.success is True
-        assert len(oss_env["summaries"]) == 1
-        summary = oss_env["summaries"][0]
-        assert summary.queries_run == 1
-        assert summary.total_issues_found == 5
-        assert summary.opportunities == 2
-        assert summary.duplicates == 3
-        assert "oss_summary_notification" in result.data
+        assert len(oss_env["stats"]) == 1
+        stats = oss_env["stats"][0]
+        assert stats.queries_run == 1
+        assert stats.total_issues_found == 5
+        assert stats.opportunities == 2
+        assert stats.duplicates == 3
 
-    def test_oss_summary_failure_does_not_fail_job(self, pipeline, oss_env, monkeypatch):
-        def boom(summary, **kw):
+    def test_stats_delivery_failure_does_not_fail_job(self, pipeline, oss_env, monkeypatch):
+        def boom(opps, **kw):
             raise RuntimeError("telegram exploded")
 
-        monkeypatch.setattr(jobs_module, "notify_oss_run_summary", boom)
+        monkeypatch.setattr(jobs_module, "notify_oss_opportunities", boom)
         result = jobs_module.job_oss_hunt()
         assert result.success is True
         assert "persist_state" in pipeline["calls"]
-        assert result.data["oss_summary_notification"] == {
+        assert result.data["notification"] == {
             "error": "delivery raised an unexpected exception"
         }
 
@@ -519,22 +516,15 @@ class TestOssHuntJob:
             lambda client, config: HunterResult(opportunities=[], queries_run=1),
         )
         delivered = []
-        summaries = []
         monkeypatch.setattr(
             jobs_module,
             "notify_oss_opportunities",
             lambda opps, **kw: (delivered.append(list(opps)), _result_ok())[1],
         )
-        monkeypatch.setattr(
-            jobs_module,
-            "notify_oss_run_summary",
-            lambda summary, **kw: (summaries.append(summary), _result_ok())[1],
-        )
         result = jobs_module.job_oss_hunt()
         assert result.success is True
         assert len(delivered) == 1
         assert delivered[0] == []
-        assert len(summaries) == 1
         assert pipeline["persisted"] is not None
 
 
@@ -543,19 +533,12 @@ class TestSecurityJob:
     def _mock_security_notify(self, monkeypatch: pytest.MonkeyPatch):
         """Record security deliveries; never touch Telegram."""
         deliveries: list = []
-        summaries: list = []
         monkeypatch.setattr(
             jobs_module,
             "notify_security_alerts",
             lambda findings, **kw: (deliveries.append(list(findings)), _result_ok())[1],
         )
-        monkeypatch.setattr(
-            jobs_module,
-            "notify_security_summary",
-            lambda report, **kw: (summaries.append(report), _result_ok())[1],
-        )
         self.deliveries = deliveries
-        self.summaries = summaries
 
     def test_counts_alerts_from_state(self, pipeline):
         pipeline["items"] = {
@@ -637,14 +620,13 @@ class TestSecurityJob:
         assert result.success is True
         assert "persist_state" in pipeline["calls"]
 
-    def test_summary_delivery_is_reported(self, pipeline):
+    def test_severity_breakdown_is_reported(self, pipeline):
         pipeline["items"] = {
             "security": {"octo/repo/dependabot/1": {"severity": "low", "state": "open"}}
         }
         result = jobs_module.job_security()
         assert result.success is True
-        assert len(self.summaries) == 1
-        assert "security_summary_notification" in result.data
+        assert "security_summary_notification" not in result.data
         assert result.data["by_severity"] == {"low": 1}
 
     def test_fatal_when_state_unreadable(self, pipeline, monkeypatch):

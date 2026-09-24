@@ -10,8 +10,8 @@ name: Daily
 
 on:
   schedule:
-    # 08:00 UTC daily. Cron in Actions is always UTC.
-    - cron: "0 8 * * *"
+    # 15:00 UTC daily (21:00 IST). Cron in Actions is always UTC.
+    - cron: "0 15 * * *"
   workflow_dispatch:
 
 # All six workflows share one state file (data/state/current_state.json), so

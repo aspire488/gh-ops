@@ -29,6 +29,7 @@ PHASE_1_7_PACKAGES = (
     "src.intelligence",
     "src.developer",
     "src.notifications",
+    "src.reporting",
     "src.utils",
 )
 

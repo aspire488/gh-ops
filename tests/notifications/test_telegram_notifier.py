@@ -316,7 +316,7 @@ class TestConvenienceEntryPoints:
         )
         assert result.topic == "alerts"
         assert result.sent == 1
-        assert "alerts" in transport.sent[0][1]
+        assert "MONITORING" in transport.sent[0][1]
 
     def test_notify_monitor_alerts_with_nothing_to_report(self):
         transport = FakeTransport()

@@ -11,6 +11,7 @@ Public API:
     - NotificationResult: structured delivery outcome
     - format_monitor_alerts / format_oss_opportunities / format_developer_report
     - notify_monitor_alerts / notify_oss_opportunities / notify_developer_report
+    - notify_report: deliver a pre-built shared report to any topic
 
 No inbound control: this package never polls Telegram, never registers
 webhooks, and never accepts commands.
@@ -42,6 +43,7 @@ from src.notifications.telegram import (
     format_monitor_alerts,
     format_oss_opportunities,
     format_oss_run_summary,
+    format_report,
     format_run_summary,
     format_security_alerts,
     format_security_summary,
@@ -51,6 +53,7 @@ from src.notifications.telegram import (
     notify_monitor_alerts,
     notify_oss_opportunities,
     notify_oss_run_summary,
+    notify_report,
     notify_run_summary,
     notify_security_alerts,
     notify_security_summary,
@@ -79,6 +82,7 @@ __all__ = [
     "format_monitor_alerts",
     "format_oss_opportunities",
     "format_oss_run_summary",
+    "format_report",
     "format_run_summary",
     "format_security_alerts",
     "format_security_summary",
@@ -88,6 +92,7 @@ __all__ = [
     "notify_monitor_alerts",
     "notify_oss_opportunities",
     "notify_oss_run_summary",
+    "notify_report",
     "notify_run_summary",
     "notify_security_alerts",
     "notify_security_summary",

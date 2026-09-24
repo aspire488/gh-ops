@@ -27,7 +27,6 @@ from tests.notifications._fakes import (
     make_opportunity,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────────
 
 
@@ -139,22 +138,21 @@ class TestMonitorAlerts:
     def test_empty_input_returns_no_messages(self):
         assert format_monitor_alerts([]) == []
 
-    def test_title_counts_notifiable_results(self):
+    def test_title_uses_severity_and_report_name(self):
         results = [
             make_monitor_result(MonitorStatus.ALERT),
             make_monitor_result(MonitorStatus.ERROR),
         ]
-        assert f"*{esc('gh-ops monitor alerts (2)')}*" in format_monitor_alerts(results)[0]
+        assert f"*{esc('🟠 GH-OPS · MONITORING')}*" in format_monitor_alerts(results)[0]
 
-    def test_includes_status_monitor_resource_and_summary(self):
+    def test_includes_resource_and_summary(self):
         result = make_monitor_result(
             MonitorStatus.ALERT, monitor="release", resource="octo/example", summary="new tag"
         )
         message = format_monitor_alerts([result])[0]
-        assert esc("[ALERT]") in message
-        assert "release" in message
         assert "octo/example" in message
         assert "new tag" in message
+        assert f"*{esc('🟠 GH-OPS · MONITORING')}*" in message
 
     def test_input_order_is_preserved(self):
         results = [

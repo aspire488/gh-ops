@@ -1803,9 +1803,9 @@ accepts no inbound control, and calls no LLM, agent, MCP, or UEA runtime.
 | `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
 | `oss_opportunities` | `notify_oss_opportunities` — ranked opportunities |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
-| `run_summary` | `notify_run_summary` — daily/monitoring completion summary (toggle: `telegram.run_summary`) |
-| `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (toggle: `telegram.oss_summary`) |
-| `security` | `notify_security_alerts` / `notify_security_summary` — security job findings (summary toggle: `telegram.security_summary`) |
+| `run_summary` | `notify_report` — daily/weekly briefs from the reporting ledger (toggle: `telegram.run_summary`) |
+| `oss_summary` | reserved; no job entry point (formatter `format_oss_run_summary` kept for API compatibility) |
+| `security` | `notify_security_alerts` — open findings; recovery RESOLVED events via `notify_report` |
 
 A chat target with no `topics` receives every topic. Chats are served in
 configured order.
@@ -1970,7 +1970,7 @@ Implemented:
 - [x] `src/intelligence/security/radar.py` — `RadarConfig`, `analyze_security`, `SECURITY_RESOURCE_KEY` / `SECURITY_NOTIFIED_KEY`
 - [x] `src/monitors/security.py` — NEW open actionable → ALERT; REMOVED/CHANGED semantics; collection failure → ERROR
 - [x] `MonitorCategory.SECURITY` + registry wiring (`_collector_to_monitor("security") → "security"`, run order includes security)
-- [x] Telegram `TOPIC_SECURITY`, `format_security_alerts` / `format_security_summary`, `notify_security_*` (+ `telegram.security_summary` toggle)
+- [x] Telegram `TOPIC_SECURITY`, `format_security_alerts` / `format_security_summary`, `notify_security_*` (+ `telegram.security_summary` toggle; jobs no longer call the summary notifier)
 - [x] `job_security` — collect → radar → deliver new actionable (mark on `delivery.ok` only) → persist `security_notified` → optional summary
 - [x] `config/monitoring.yml` `monitors.security` block; `config/telegram.yml` `security_summary` + `security` topic
 - [x] Tests: radar/models, monitor, Telegram security report, rewritten `TestSecurityJob` (64 security-focused tests in this batch)

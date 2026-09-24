@@ -64,7 +64,7 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
-Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and monitoring runs also send factual completion summaries. When `telegram.oss_summary` is enabled, the OSS hunter sends a completion summary after each run. When `telegram.security_summary` is enabled, the security job also sends a completion summary. Their repository count comes only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery).
+Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and weekly runs may send briefs built from the shared reporting ledger (only when meaningful events exist; a quiet run sends nothing). Completion summaries (run/oss/security) are no longer sent by jobs; their formatters remain exported for API compatibility. Repository counts come only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery; recovery events clear the mark and may send a RESOLVED report).
 
 ## Local Secrets (`.env`)
 
@@ -421,9 +421,9 @@ telegram:
 | `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
 | `oss_opportunities` | `notify_oss_opportunities` |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
-| `run_summary` | `notify_run_summary` — daily/monitoring completion summary (`telegram.run_summary`) |
-| `oss_summary` | `notify_oss_run_summary` — OSS hunter completion summary (`telegram.oss_summary`) |
-| `security` | `notify_security_alerts` / `notify_security_summary` — security findings batch + summary (`telegram.security_summary`) |
+| `run_summary` | `notify_report` — daily/weekly briefs built from the reporting ledger (`telegram.run_summary`) |
+| `oss_summary` | reserved; jobs no longer send OSS completion summaries (formatter kept for API compatibility) |
+| `security` | `notify_security_alerts` — open findings batch; recovery events via `notify_report` |
 
 ### Delivery Behavior
 

@@ -22,7 +22,7 @@ WORKFLOW_DIR = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
 #: Expected workflow filename -> (job name, cron schedules).
 EXPECTED_WORKFLOWS = {
-    "daily.yml": ("daily", ["0 8 * * *"]),
+    "daily.yml": ("daily", ["0 15 * * *"]),
     "monitoring.yml": ("monitoring", ["0 */2 * * *"]),
     "weekly-report.yml": ("weekly-report", ["0 9 * * 1"]),
     "oss-hunter.yml": ("oss-hunt", ["0 10 * * *"]),
@@ -319,7 +319,7 @@ class TestActionPinning:
     def test_each_pin_carries_a_version_comment(self, filename):
         """A bare SHA is unauditable; the comment records which release it is."""
         text = (WORKFLOW_DIR / filename).read_text(encoding="utf-8")
-        for action, (sha, version) in PINNED_ACTIONS.items():
+        for action, (_sha, version) in PINNED_ACTIONS.items():
             if action not in text:
                 continue
             uses_lines = [
@@ -416,7 +416,6 @@ class TestStatePersistence:
 
     @pytest.mark.parametrize("filename", all_workflow_names())
     def test_cache_key_contains_no_secret(self, filename):
-        text = (WORKFLOW_DIR / filename).read_text(encoding="utf-8")
         for step in _uses_steps(load_workflow(filename)):
             if "actions/cache" in step["uses"]:
                 assert "secrets." not in step["with"]["key"]

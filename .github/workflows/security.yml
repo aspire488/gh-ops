@@ -10,8 +10,9 @@ name: Security
 
 on:
   schedule:
-    # 06:00 UTC daily, before the daily collection run.
-    - cron: "0 6 * * *"
+    # 02:00 UTC daily (07:30 IST), before the daily collection run.
+    # Offset from monitoring's :30 slots so the two never share a minute.
+    - cron: "0 2 * * *"
   workflow_dispatch:
 
 # Serialized with every other state-writing workflow. See daily.yml.

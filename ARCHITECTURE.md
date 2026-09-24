@@ -772,11 +772,11 @@ owned by a Phase 1–7 module, it does not belong in this layer.
 
 | Workflow | Trigger | Job | Permissions |
 |----------|---------|-----|-------------|
-| `daily.yml` | `cron '0 8 * * *'` + `workflow_dispatch` | `daily` | `contents:read`, `issues:read`, `pull-requests:read`, `actions:read` |
-| `monitoring.yml` | `cron '0 */2 * * *'` + `workflow_dispatch` | `monitoring` | `contents:read`, `actions:read`, `security-events:read` |
-| `weekly-report.yml` | `cron '0 9 * * 1'` + `workflow_dispatch` | `weekly-report` | `contents:read`, `issues:read`, `pull-requests:read` |
-| `oss-hunter.yml` | `cron '0 10 * * *'` + `workflow_dispatch` | `oss-hunt` | `contents:read`, `issues:read` |
-| `security.yml` | `cron '0 6 * * *'` + `workflow_dispatch` | `security` | `contents:read`, `security-events:read` |
+| `daily.yml` | `cron '30 15 * * *'` + `workflow_dispatch` | `daily` | `contents:read`, `issues:read`, `pull-requests:read`, `actions:read` |
+| `monitoring.yml` | `cron '30 */2 * * *'` + `workflow_dispatch` | `monitoring` | `contents:read`, `actions:read`, `security-events:read` |
+| `weekly-report.yml` | `cron '0 16 * * 1'` + `workflow_dispatch` | `weekly-report` | `contents:read`, `issues:read`, `pull-requests:read` |
+| `oss-hunter.yml` | `cron '0 12 * * *'` + `workflow_dispatch` | `oss-hunt` | `contents:read`, `issues:read` |
+| `security.yml` | `cron '0 2 * * *'` + `workflow_dispatch` | `security` | `contents:read`, `security-events:read` |
 | `manual.yml` | `workflow_dispatch` only | any of the six | union of the above, all read-only |
 
 All schedules are UTC. Every job has `timeout-minutes: 25`, matching
@@ -1877,11 +1877,11 @@ prevent delivery to the others.
 **Goal:** Production automation.
 
 Implemented:
-- [x] `.github/workflows/daily.yml` — `cron '0 8 * * *'` + dispatch
-- [x] `.github/workflows/monitoring.yml` — `cron '0 */2 * * *'` + dispatch
-- [x] `.github/workflows/weekly-report.yml` — `cron '0 9 * * 1'` + dispatch
-- [x] `.github/workflows/oss-hunter.yml` — `cron '0 10 * * *'` + dispatch
-- [x] `.github/workflows/security.yml` — `cron '0 6 * * *'` + dispatch
+- [x] `.github/workflows/daily.yml` — `cron '30 15 * * *'` + dispatch
+- [x] `.github/workflows/monitoring.yml` — `cron '30 */2 * * *'` + dispatch
+- [x] `.github/workflows/weekly-report.yml` — `cron '0 16 * * 1'` + dispatch
+- [x] `.github/workflows/oss-hunter.yml` — `cron '0 12 * * *'` + dispatch
+- [x] `.github/workflows/security.yml` — `cron '0 2 * * *'` + dispatch
 - [x] `.github/workflows/manual.yml` — `workflow_dispatch` only, `choice` job input
 - [x] `src/jobs/pipeline.py` — shared plumbing: config, collection, state, diff
 - [x] `src/jobs/jobs.py` — the six jobs + `register_all_jobs`

@@ -8,8 +8,8 @@ name: OSS Hunter
 
 on:
   schedule:
-    # 10:00 UTC daily, after the daily collection run.
-    - cron: "0 10 * * *"
+    # 12:00 UTC daily (17:30 IST), before the daily collection run.
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
 concurrency:

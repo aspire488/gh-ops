@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from src.reporting.model import SEVERITY_RANK, ReportEvent, Severity
+from src.reporting.model import (
+    PRIORITY_RANK,
+    SEVERITY_RANK,
+    ReportEvent,
+    Severity,
+)
 
 
 def event_key(event: ReportEvent) -> str:
@@ -27,10 +32,16 @@ def dedupe(events: Iterable[ReportEvent]) -> list[ReportEvent]:
 
 
 def prioritize(events: Iterable[ReportEvent]) -> list[ReportEvent]:
-    """Sort by severity rank, then timestamp, then identity (deterministic)."""
+    """Sort by action priority, then severity, then timestamp, then identity.
 
-    def sort_key(event: ReportEvent) -> tuple[int, str, str]:
+    Priority (P0→P3) answers "when to look"; severity answers "what kind".
+    Both participate so a demoted action-required item can fall below a
+    more urgent important item only when its priority says so.
+    """
+
+    def sort_key(event: ReportEvent) -> tuple[int, int, str, str]:
         return (
+            PRIORITY_RANK.get(event.effective_priority, len(PRIORITY_RANK)),
             SEVERITY_RANK.get(event.severity, len(SEVERITY_RANK)),
             event.timestamp or "",
             event_key(event),

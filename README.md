@@ -18,10 +18,11 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
 | Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
 | Security Intelligence batch | ✅ Complete | 1150/1150 tests |
+| Product-hardening batch | ✅ Complete | 1219/1219 tests |
 
-**Total: 1150/1150 tests passing.**
+**Total: 1219/1219 tests passing.**
 
-Figures are cumulative as of the end of each phase (Security Intelligence is a post-Phase-8 batch).
+Figures are cumulative as of the end of each phase (Security Intelligence and Product-hardening are post-Phase-8 batches).
 
 ## Architecture
 
@@ -481,14 +482,18 @@ is interpolated into a shell command, and no business logic lives in YAML.
 
 ### Workflows
 
-| Workflow | Schedule (UTC) | Job | Purpose |
-|----------|----------------|-----|---------|
-| `daily.yml` | `0 8 * * *` | `daily` | Collection, release/CI detection, alert digest |
-| `monitoring.yml` | `0 */2 * * *` | `monitoring` | CI failures + security alerts |
-| `weekly-report.yml` | `0 9 * * 1` | `weekly-report` | Personal activity report |
-| `oss-hunter.yml` | `0 10 * * *` | `oss-hunt` | OSS opportunity discovery |
-| `security.yml` | `0 6 * * *` | `security` | Dependabot + code scanning radar, at-least-once alerts, summary |
-| `manual.yml` | on demand | any | `workflow_dispatch` with a `choice` job input |
+| Workflow | Schedule (UTC) | Schedule (IST) | Job | Purpose |
+|----------|----------------|----------------|-----|---------|
+| `security.yml` | `0 2 * * *` | 07:30 | `security` | Dependabot + code scanning radar, at-least-once alerts |
+| `oss-hunter.yml` | `0 12 * * *` | 17:30 | `oss-hunt` | OSS opportunity discovery |
+| `daily.yml` | `30 15 * * *` | 21:00 | `daily` | Collection, release/CI detection, alert digest, daily brief |
+| `weekly-report.yml` | `0 16 * * 1` | Mon 21:30 | `weekly-report` | Personal activity report + weekly brief |
+| `monitoring.yml` | `30 */2 * * *` | every 2h at :30 | `monitoring` | CI failures + security alerts |
+| `manual.yml` | on demand | — | any | `workflow_dispatch` with a `choice` job input |
+
+Schedules are staggered so no two state-writing jobs share a minute
+(monitoring uses `:30`, others `:00`/`:30` on non-overlapping slots).
+IST = UTC+5:30 (fixed offset; no tzdata dependency).
 
 All six also support manual dispatch. Every job has a 25-minute timeout.
 

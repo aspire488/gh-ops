@@ -3,32 +3,127 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from src.reporting.aggregate import dedupe, group_by_severity, prioritize
 from src.reporting.model import (
+    PRIORITY_LABEL,
     SEVERITY_EMOJI,
     SEVERITY_LABEL,
+    SUBSYSTEM_LABEL,
     ReportEvent,
-    Severity,
 )
 from src.utils.time import format_ist_coverage, format_ist_date, format_ist_datetime
 
+#: Metadata keys rendered as one-line context under the title (in order).
+_CONTEXT_KEYS: tuple[str, ...] = (
+    "branch",
+    "workflow_name",
+    "conclusion",
+    "package_name",
+    "severity",
+    "event_type",
+    "status",
+    "resource",
+)
+
+
+def event_context(event: ReportEvent) -> list[str]:
+    """Subsystem-specific context lines for an event (deterministic order)."""
+    lines: list[str] = []
+    meta = event.metadata or {}
+    for key in _CONTEXT_KEYS:
+        if key == "event_type":
+            continue  # already represented by the block header
+        value = meta.get(key)
+        if value in (None, "", False):
+            continue
+        if key == "branch":
+            lines.append(f"branch: {value}")
+        elif key == "workflow_name":
+            lines.append(f"workflow: {value}")
+        elif key == "conclusion":
+            lines.append(f"conclusion: {value}")
+        elif key == "package_name":
+            lines.append(f"package: {value}")
+        elif key == "severity":
+            lines.append(f"alert severity: {value}")
+        elif key == "status":
+            lines.append(f"status: {value}")
+        elif key == "resource" and str(value) != event.repository:
+            lines.append(f"resource: {value}")
+    return lines
+
 
 def event_block(event: ReportEvent) -> str:
-    """Render one event as a self-contained plain-text block."""
+    """Render one event as a self-contained plain-text block.
+
+    Layout::
+
+        • [P0] owner/repo · CI
+          Title
+          context lines…
+          description
+          https://…
+    """
     lines: list[str] = []
-    header = event.repository or event.subsystem
+    priority = PRIORITY_LABEL[event.effective_priority]
+    subsystem = SUBSYSTEM_LABEL.get(event.subsystem, event.subsystem.upper())
+    header_target = event.repository or event.subsystem or event.event_type
     if event.title:
-        lines.append(f"• {header}" if header else f"• {event.title}")
-        if header and event.title:
-            lines.append(f"  {event.title}")
+        lines.append(f"• [{priority}] {header_target} · {subsystem}")
+        lines.append(f"  {event.title}")
     else:
-        lines.append(f"• {header}" if header else f"• {event.event_type}")
+        lines.append(f"• [{priority}] {header_target} · {subsystem}")
+    lines.extend(f"  {line}" for line in event_context(event))
     if event.description:
         lines.append(f"  {event.description}")
     if event.url:
         lines.append(f"  {event.url}")
     return "\n".join(lines)
+
+
+def data_quality_block(data_quality: dict[str, Any] | None) -> str | None:
+    """One-line data-quality note, or None when healthy/absent.
+
+    Healthy or empty health is omitted so a clean run does not advertise
+    "100%" or collector counts. Only incomplete collectors surface.
+    """
+    if not data_quality:
+        return None
+    incomplete = int(data_quality.get("incomplete") or 0)
+    collectors = int(data_quality.get("collectors") or 0)
+    if incomplete <= 0 or collectors <= 0:
+        return None
+    pct = data_quality.get("completeness_pct")
+    detail = f"{incomplete}/{collectors} collectors incomplete"
+    if isinstance(pct, (int, float)):
+        detail = f"{detail} ({pct}% complete)"
+    return f"⚠️ Data quality: {detail}"
+
+
+def _repository_groups(
+    ordered: Sequence[ReportEvent],
+) -> list[tuple[str, list[ReportEvent]]]:
+    """Group events by repository, preserving priority order within each.
+
+    Repositories appear in the order of their highest-priority event so the
+    most urgent repo surfaces first.
+    """
+    groups: dict[str, list[ReportEvent]] = {}
+    order: list[str] = []
+    for event in ordered:
+        key = event.repository or event.subsystem
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(event)
+    return [(key, groups[key]) for key in order]
+
+
+def _omit_empty(lines: list[str]) -> list[str]:
+    """Drop blank lines so briefs never emit empty sections."""
+    return [line for line in lines if line and line.strip()]
 
 
 def build_report(
@@ -62,10 +157,17 @@ def build_daily_brief(
     coverage_start: datetime | None = None,
     coverage_end: datetime | None = None,
     repository_count: int = 0,
+    data_quality: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]] | None:
-    """Build the daily brief, or None when there is nothing meaningful."""
+    """Build the daily brief, or None when there is nothing meaningful.
+
+    Sections are repository-first; empty categories are omitted. A quiet run
+    with healthy collectors and no events returns None (no-op silence).
+    Data-quality issues surface only when collectors failed.
+    """
     ordered = prioritize(dedupe(events))
-    if not ordered:
+    quality_line = data_quality_block(data_quality)
+    if not ordered and not quality_line:
         return None
 
     end = coverage_end or datetime.now(timezone.utc)
@@ -75,25 +177,18 @@ def build_daily_brief(
     blocks: list[str] = [
         format_ist_datetime(end),
         f"Coverage: {format_ist_coverage(start, end)}",
-        f"• {repository_count} repositories monitored",
     ]
+    if repository_count > 0:
+        blocks.append(f"• {repository_count} repositories monitored")
 
-    counts: dict[str, int] = {}
-    for event in ordered:
-        counts[event.subsystem] = counts.get(event.subsystem, 0) + 1
-    if counts:
-        summary = ", ".join(
-            f"{name}: {count}" for name, count in sorted(counts.items())
-        )
-        blocks.append(summary)
+    for repo, items in _repository_groups(ordered):
+        blocks.append(f"▸ {repo}")
+        blocks.extend(event_block(event) for event in items)
 
-    action_items = [e for e in ordered if e.severity is Severity.ACTION_REQUIRED]
-    attention = action_items or [e for e in ordered if e.severity is Severity.IMPORTANT]
-    if attention:
-        blocks.append("Needs attention:")
-        blocks.extend(event_block(event) for event in attention[:5])
+    if quality_line:
+        blocks.append(quality_line)
 
-    return title, blocks
+    return title, _omit_empty(blocks)
 
 
 def build_weekly_brief(
@@ -103,37 +198,37 @@ def build_weekly_brief(
     coverage_end: datetime | None = None,
     repository_count: int = 0,
     developer_events: int = 0,
+    data_quality: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]] | None:
-    """Build the weekly brief, or None when empty."""
+    """Build the weekly brief, or None when empty.
+
+    Only events not already briefed for this window should be passed by the
+    caller. Empty sections are omitted; data-quality issues surface only when
+    collectors failed.
+    """
     ordered = prioritize(dedupe(events))
     end = coverage_end or datetime.now(timezone.utc)
     start = coverage_start or (end - timedelta(days=7))
+    quality_line = data_quality_block(data_quality)
 
-    if not ordered and developer_events <= 0 and repository_count <= 0:
+    if not ordered and developer_events <= 0 and not quality_line:
         return None
 
     title = f"🔵 GH-OPS · {format_ist_date(end)} WEEKLY BRIEF"
     blocks: list[str] = [
         format_ist_datetime(end),
         f"Coverage: {format_ist_coverage(start, end)}",
-        f"• {repository_count} repositories monitored",
     ]
-    if developer_events:
+    if repository_count > 0:
+        blocks.append(f"• {repository_count} repositories monitored")
+    if developer_events > 0:
         blocks.append(f"• {developer_events} developer activities")
 
-    if ordered:
-        counts: dict[str, int] = {}
-        for event in ordered:
-            counts[event.subsystem] = counts.get(event.subsystem, 0) + 1
-        blocks.append(
-            ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
-        )
-        action_items = [e for e in ordered if e.severity is Severity.ACTION_REQUIRED]
-        attention = action_items or [
-            e for e in ordered if e.severity is Severity.IMPORTANT
-        ]
-        if attention:
-            blocks.append("Needs attention:")
-            blocks.extend(event_block(event) for event in attention[:5])
+    for repo, items in _repository_groups(ordered):
+        blocks.append(f"▸ {repo}")
+        blocks.extend(event_block(event) for event in items)
 
-    return title, blocks
+    if quality_line:
+        blocks.append(quality_line)
+
+    return title, _omit_empty(blocks)

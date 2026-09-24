@@ -109,7 +109,9 @@ class TestEscaping:
     def test_trailing_backslash_is_escaped_not_dropped(self):
         result = make_monitor_result(MonitorStatus.ALERT, summary="trailing\\")
         message = format_monitor_alerts([result])[0]
-        assert message.endswith("trailing\\\\")  # one backslash -> escaped pair
+        # One backslash -> escaped pair; context lines may follow the title.
+        assert esc("trailing\\") in message
+        assert "trailing\\" not in message.replace(esc("trailing\\"), "")
         _assert_well_formed([message], TELEGRAM_MAX_MESSAGE_LENGTH)
 
 

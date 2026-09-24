@@ -662,6 +662,89 @@ class TestStatusJob:
 # ── Failure isolation ────────────────────────────────────────────
 
 
+class TestPersistentConditionSuppression:
+    """A condition that stays true must be announced once, not every run."""
+
+    @pytest.fixture()
+    def persistent_ci_alert(self, monkeypatch: pytest.MonkeyPatch):
+        from src.core.monitor import MonitorCategory, MonitorResult, MonitorStatus
+
+        # Non-main branch → IMPORTANT (lower urgency than main/master).
+        alert = MonitorResult(
+            monitor="ci",
+            resource="owner/repo/run/1",
+            status=MonitorStatus.ALERT,
+            summary="CI failed",
+            category=MonitorCategory.CI,
+            metadata={"event_type": "failure", "branch": "develop", "url": "https://x"},
+        )
+        sent: list[list] = []
+
+        def fake_run_monitors(state, config):
+            return [alert]
+
+        def fake_notify(results, *, config=None, transport=None):
+            sent.append(list(results))
+            return _result_ok()
+
+        monkeypatch.setattr(jobs_module, "run_monitors", fake_run_monitors)
+        monkeypatch.setattr(jobs_module, "evaluate_events", lambda *a, **k: [])
+        monkeypatch.setattr(jobs_module, "notify_monitor_alerts", fake_notify)
+        return sent
+
+    def test_second_run_does_not_reannounce(
+        self, pipeline, persistent_ci_alert, monkeypatch
+    ):
+        jobs_module.job_daily()
+        assert len(persistent_ci_alert) == 1
+        assert len(persistent_ci_alert[0]) == 1
+
+        ledger_after = dict(
+            pipeline["persisted"].resources.get("reporting_events", {})
+        )
+
+        def load_with_ledger():
+            state = _empty_state()
+            state.resources["reporting_events"] = ledger_after
+            return state
+
+        monkeypatch.setattr(jobs_module, "load_previous_state", load_with_ledger)
+        jobs_module.job_daily()
+
+        # Second run must not re-send the same persistent condition.
+        assert len(persistent_ci_alert) == 1
+
+    def test_escalation_still_notifies(
+        self, pipeline, persistent_ci_alert, monkeypatch
+    ):
+        from src.core.monitor import MonitorCategory, MonitorResult, MonitorStatus
+
+        jobs_module.job_daily()
+        ledger_after = dict(
+            pipeline["persisted"].resources.get("reporting_events", {})
+        )
+
+        def load_with_ledger():
+            state = _empty_state()
+            state.resources["reporting_events"] = ledger_after
+            return state
+
+        monkeypatch.setattr(jobs_module, "load_previous_state", load_with_ledger)
+
+        # Same identity, but branch moves to main → ACTION_REQUIRED escalation.
+        escalated = MonitorResult(
+            monitor="ci",
+            resource="owner/repo/run/1",
+            status=MonitorStatus.ALERT,
+            summary="CI failed on main",
+            category=MonitorCategory.CI,
+            metadata={"event_type": "failure", "branch": "main", "url": "https://x"},
+        )
+        monkeypatch.setattr(jobs_module, "run_monitors", lambda s, c: [escalated])
+        jobs_module.job_daily()
+        assert len(persistent_ci_alert) == 2
+
+
 class TestNotificationFailureIsolation:
     def test_alert_delivery_failure_does_not_fail_the_job(self, pipeline, monkeypatch):
         """A delivery problem must never discard collected state."""

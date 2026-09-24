@@ -163,6 +163,37 @@ def report_event_from_monitor(result: MonitorResult) -> ReportEvent | None:
     if result.status is MonitorStatus.ERROR:
         identity = f"{result.monitor}:collection_error:{result.resource}"
 
+    # Prefer explicit metadata URL, then the triggering event payload.
+    url = str(metadata.get("url") or metadata.get("html_url") or "")
+    if not url and result.events:
+        first = result.events[0]
+        if hasattr(first, "current") and isinstance(first.current, dict):
+            url = str(first.current.get("html_url") or first.current.get("url") or "")
+
+    # Context carried into Telegram event blocks (branch, workflow, package, …).
+    context: dict[str, Any] = {
+        "monitor": result.monitor,
+        "resource": result.resource,
+        "status": result.status.value,
+    }
+    for key in ("branch", "head_branch", "workflow_name", "conclusion", "package_name", "severity"):
+        if metadata.get(key) not in (None, ""):
+            context[key] = metadata[key]
+    if result.events:
+        first = result.events[0]
+        current = getattr(first, "current", None)
+        if isinstance(current, dict):
+            for key in ("branch", "head_branch", "workflow_name", "conclusion", "html_url"):
+                if key in current and current[key] not in (None, ""):
+                    context.setdefault(key, current[key])
+            if not url:
+                url = str(current.get("html_url") or current.get("url") or "")
+
+    # Normalize head_branch → branch for the shared context renderer.
+    if "branch" not in context and "head_branch" in context:
+        context["branch"] = context.pop("head_branch")
+    context.pop("head_branch", None)
+
     return ReportEvent(
         subsystem=_subsystem_for(result),
         event_type=event_type or result.status.value,
@@ -170,15 +201,11 @@ def report_event_from_monitor(result: MonitorResult) -> ReportEvent | None:
         title=title,
         description="",
         repository=repository or result.resource,
-        url=str(metadata.get("url") or metadata.get("html_url") or ""),
+        url=url,
         identity=identity,
         timestamp=str(result.evaluated_at or ""),
         source=result.monitor,
-        metadata={
-            "monitor": result.monitor,
-            "resource": result.resource,
-            "status": result.status.value,
-        },
+        metadata=context,
     )
 
 

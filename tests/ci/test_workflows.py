@@ -22,11 +22,11 @@ WORKFLOW_DIR = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
 #: Expected workflow filename -> (job name, cron schedules).
 EXPECTED_WORKFLOWS = {
-    "daily.yml": ("daily", ["0 15 * * *"]),
-    "monitoring.yml": ("monitoring", ["0 */2 * * *"]),
-    "weekly-report.yml": ("weekly-report", ["0 9 * * 1"]),
-    "oss-hunter.yml": ("oss-hunt", ["0 10 * * *"]),
-    "security.yml": ("security", ["0 6 * * *"]),
+    "daily.yml": ("daily", ["30 15 * * *"]),
+    "monitoring.yml": ("monitoring", ["30 */2 * * *"]),
+    "weekly-report.yml": ("weekly-report", ["0 16 * * 1"]),
+    "oss-hunter.yml": ("oss-hunt", ["0 12 * * *"]),
+    "security.yml": ("security", ["0 2 * * *"]),
     "manual.yml": ("manual", []),
 }
 

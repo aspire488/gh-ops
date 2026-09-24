@@ -26,6 +26,7 @@ from typing import Any
 
 from src.core.dispatcher import Dispatcher, JobFunc, JobResult, get_dispatcher
 from src.core.errors import ErrorCode, ErrorCollector, ErrorSeverity, GhOpsError
+from src.core.lifecycle import reconcile_repository_lifecycle
 from src.core.models import CurrentState, ResourceEvent
 from src.developer.activity import extract_activity
 from src.developer.reports import generate_report
@@ -69,11 +70,13 @@ from src.reporting.convert import (
 )
 from src.reporting.ledger import (
     events_for_brief,
+    filter_notifiable,
     load_ledger,
     mark_briefed,
     mark_delivered,
     merge_events,
     prune_ledger,
+    resolve_conditions,
     state_with_ledger,
     undelivered_events,
 )
@@ -189,6 +192,16 @@ def _collect_and_persist(
     except Exception as exc:
         return _fatal(job, ErrorCode.STATE_LOAD_FAILED, "Could not load state", exc), None, None, None, empty
 
+    # Config is the source of truth: retire repos removed from repositories.yml
+    # and prune their state before diffing so monitors never see synthetic
+    # REMOVED events for a config change.
+    try:
+        previous, _retired = reconcile_repository_lifecycle(previous, repositories)
+    except Exception as exc:
+        return _fatal(
+            job, ErrorCode.STATE_VALIDATION_FAILED, "Could not reconcile repository lifecycle", exc
+        ), None, None, None, empty
+
     try:
         snapshot = build_snapshot(client, config, resources)
     except Exception as exc:
@@ -262,12 +275,33 @@ def _deliver_monitoring_alerts(
     report_events: list[ReportEvent],
     ledger: dict[str, dict],
 ) -> tuple[NotificationResult | None, dict[str, dict]]:
-    """Deliver immediate alerts and mark delivered ledger entries."""
-    delivery = _safe_notify(job, lambda: notify_monitor_alerts(results, config=config))
-    if delivery is not None and not delivery.skipped and not delivery.ok:
-        logger.warning("monitor alert delivery reported failures: %s", delivery.failed_chats)
-    elif delivery is None:
-        logger.warning("monitor alert delivery raised; alerts were not delivered")
+    """Deliver immediate alerts and mark delivered ledger entries.
+
+    Persistent-condition suppression: results whose report events are already
+    NOTIFIED/OPEN for the same identity are filtered out before Telegram is
+    called, so an ongoing CI failure or collection error is announced once.
+    """
+    from src.reporting.ledger import event_should_notify
+
+    notifiable_events = filter_notifiable(ledger, report_events)
+    notifiable_results = [
+        result
+        for result in results
+        if (event := report_event_from_monitor(result)) is not None
+        and event_should_notify(ledger, event)
+    ]
+
+    delivery = None
+    if notifiable_results:
+        delivery = _safe_notify(
+            job, lambda: notify_monitor_alerts(notifiable_results, config=config)
+        )
+        if delivery is not None and not delivery.skipped and not delivery.ok:
+            logger.warning(
+                "monitor alert delivery reported failures: %s", delivery.failed_chats
+            )
+        elif delivery is None:
+            logger.warning("monitor alert delivery raised; alerts were not delivered")
 
     # Retry previously undelivered monitoring events not in this batch.
     current_ids = {event.identity for event in report_events}
@@ -291,14 +325,16 @@ def _deliver_monitoring_alerts(
                     ledger, [event.identity or event.title for event in retry]
                 )
 
+    delivered_ids = [
+        event.identity for event in notifiable_events if event.identity
+    ]
     if (
         delivery is not None
         and (delivery.ok or delivery.skip_reason == "nothing to send")
-        and report_events
+        and delivered_ids
     ):
-        ledger = mark_delivered(
-            ledger, [event.identity for event in report_events if event.identity]
-        )
+        ledger = mark_delivered(ledger, delivered_ids)
+        ledger = resolve_conditions(ledger, notifiable_events)
 
     return delivery, ledger
 
@@ -359,17 +395,35 @@ def _maybe_send_daily_brief(
     if not resolved_enabled:
         return None, ledger
 
+    from src.developer.activity import DataQuality
+    from src.developer.statistics import summarize_data_quality
     from src.reporting.builders import build_daily_brief
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=24)
     pending = events_for_brief(ledger, kind="daily", window=timedelta(hours=24), end=end)
     repository_count = len(monitored_repository_names(config))
+
+    quality_entries: list[DataQuality] = []
+    for collector_name, log_entry in (state.update_log or {}).items():
+        status = log_entry.get("status", "unknown")
+        quality_entries.append(
+            DataQuality(
+                collector=collector_name,
+                is_complete=status == "success",
+                observed_at=str(log_entry.get("observed_at") or ""),
+                error=log_entry.get("error") if status == "failure" else None,
+                item_count=int(log_entry.get("item_count") or 0),
+            )
+        )
+    data_quality = summarize_data_quality(quality_entries)
+
     built = build_daily_brief(
         pending,
         coverage_start=start,
         coverage_end=end,
         repository_count=repository_count,
+        data_quality=data_quality,
     )
     if built is None:
         return None, ledger
@@ -393,6 +447,7 @@ def _maybe_send_weekly_brief(
     ledger: dict[str, dict],
     *,
     developer_events: int = 0,
+    state: CurrentState | None = None,
 ) -> tuple[NotificationResult | None, dict[str, dict]]:
     """Send the weekly brief when there is content."""
     try:
@@ -403,18 +458,38 @@ def _maybe_send_weekly_brief(
     except Exception:
         pass
 
+    from src.developer.activity import DataQuality
+    from src.developer.statistics import summarize_data_quality
     from src.reporting.builders import build_weekly_brief
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=7)
     pending = events_for_brief(ledger, kind="weekly", window=timedelta(days=7), end=end)
     repository_count = len(monitored_repository_names(config))
+
+    data_quality: dict[str, Any] | None = None
+    if state is not None:
+        quality_entries: list[DataQuality] = []
+        for collector_name, log_entry in (state.update_log or {}).items():
+            status = log_entry.get("status", "unknown")
+            quality_entries.append(
+                DataQuality(
+                    collector=collector_name,
+                    is_complete=status == "success",
+                    observed_at=str(log_entry.get("observed_at") or ""),
+                    error=log_entry.get("error") if status == "failure" else None,
+                    item_count=int(log_entry.get("item_count") or 0),
+                )
+            )
+        data_quality = summarize_data_quality(quality_entries)
+
     built = build_weekly_brief(
         pending,
         coverage_start=start,
         coverage_end=end,
         repository_count=repository_count,
         developer_events=developer_events,
+        data_quality=data_quality,
     )
     if built is None:
         return None, ledger
@@ -549,7 +624,11 @@ def job_weekly_report(**kwargs: Any) -> JobResult:
     ledger = load_ledger(state)
     ledger = merge_events(ledger, activity_events)
     brief_delivery, ledger = _maybe_send_weekly_brief(
-        JOB_WEEKLY_REPORT, config, ledger, developer_events=len(records)
+        JOB_WEEKLY_REPORT,
+        config,
+        ledger,
+        developer_events=len(records),
+        state=state,
     )
     _persist_ledger(state, ledger)
 
@@ -837,8 +916,41 @@ def job_status(**kwargs: Any) -> JobResult:
             "state": state_summary(state),
             "repositories": monitored_repository_names(config),
             "jobs": list(ALL_JOB_NAMES),
+            "data_quality": _system_health(state),
         },
     )
+
+
+def _system_health(state: CurrentState) -> dict[str, Any]:
+    """Collector health summary for job self-monitoring.
+
+    Failed collectors surface as incomplete; success-only health is compact
+    so a clean status run does not dump empty failure lists.
+    """
+    from src.developer.activity import DataQuality
+    from src.developer.statistics import summarize_data_quality
+
+    entries: list[DataQuality] = []
+    for name, entry in (state.update_log or {}).items():
+        status = entry.get("status", "unknown")
+        entries.append(
+            DataQuality(
+                collector=name,
+                is_complete=status == "success",
+                observed_at=str(entry.get("observed_at") or ""),
+                error=entry.get("error") if status == "failure" else None,
+                item_count=int(entry.get("item_count") or 0),
+            )
+        )
+    summary = summarize_data_quality(entries)
+    failed = [d for d in summary.get("details", []) if not d.get("is_complete")]
+    return {
+        "collectors": summary.get("collectors", 0),
+        "complete": summary.get("complete", 0),
+        "incomplete": summary.get("incomplete", 0),
+        "completeness_pct": summary.get("completeness_pct", 100.0),
+        "failed": [{"collector": d.get("collector"), "error": d.get("error")} for d in failed],
+    }
 
 
 _JOB_FUNCTIONS: dict[str, JobFunc] = {

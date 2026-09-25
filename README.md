@@ -627,7 +627,9 @@ or contacts GitHub.
 | `jobs/jobs.py` | 50 | Six jobs, dispatch, partial failure, delivery isolation, OSS + security dedup |
 | `jobs/*` (architecture) | 17 | Dependency direction, no HTTP/LLM/eval in the job layer |
 | `.github/workflows/*` | 220 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
-| **Total** | **1150** | |
+| **Total** | **1260** | |
+
+The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, and repository/event lifecycle hardening.
 
 ## Project Structure
 

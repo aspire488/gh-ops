@@ -706,6 +706,15 @@ or contacts GitHub.
 
 The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, repository/event lifecycle hardening, and the final response-UX batch (attention-first briefs, gh-ops system-workflow classification, data-quality ledger gating). The deterministic intelligence batch adds the evidence-pack, temporal, correlation, attention, grounding, and narrative suites plus job-wiring tests.
 
+## Latest OSS Contribution Work
+
+The portfolio is actively contributing upstream alongside GH-OPS maintenance. The latest open PRs are:
+
+- **LlamaIndex #23260** — preserves originally retrieved node scores during overlapping Prev/Next expansion, with regression coverage.
+- **Pydantic AI #8823** — avoids an unnecessary RunContext copy when validation context is unset, while preserving non-None and callable contexts.
+
+These are tracked in the profile-level OSS ledger; GH-OPS itself remains **FROZEN / maintenance mode**.
+
 ## Project Structure
 
 ```

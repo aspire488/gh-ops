@@ -8,7 +8,7 @@ A reusable, deterministic GitHub operations and intelligence platform — now fr
 
 **Implementation status: COMPLETE / FROZEN 🔒**
 
-All planned implementation phases and the post-Phase-8 hardening/intelligence line are complete. The phase labels below are **historical milestones**, not an indication that Phase 8 is still the current development phase.
+All planned implementation phases and the post-Phase-8 hardening/intelligence line are complete. The phase labels below are **historical milestones only**. Phase 8 is the final numbered milestone; the complete frozen system is represented by the post-Phase-8 batches and the **1,495-test** baseline.
 
 | Historical milestone | Status | Tests |
 |-------|--------|-------|
@@ -33,7 +33,7 @@ Figures are cumulative historical checkpoints. The complete system is the final 
 
 ## Status: FROZEN 🔒
 
-**Architecture:** Complete · **Intelligence:** Complete · **Telegram:** Hardened · **OSS Radar:** Complete
+**Implementation:** Complete · **Architecture:** Complete · **Intelligence:** Complete · **Telegram:** Hardened · **OSS Radar:** Complete
 
 The deterministic core, intelligence layer, reporting pipeline, Telegram contracts, OSS Radar, optional Laya/LLM interpretation, GitHub Actions boundaries, and documentation are complete. The repository is now in **maintenance mode**: bug fixes and evidence-driven hardening are welcome; no further feature expansion is planned for this frozen baseline.
 

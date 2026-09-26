@@ -6,7 +6,11 @@ A reusable, deterministic GitHub operations and intelligence platform — now fr
 
 ## Status
 
-| Phase | Status | Tests |
+**Implementation status: COMPLETE / FROZEN 🔒**
+
+All planned implementation phases and the post-Phase-8 hardening/intelligence line are complete. The phase labels below are **historical milestones**, not an indication that Phase 8 is still the current development phase.
+
+| Historical milestone | Status | Tests |
 |-------|--------|-------|
 | Phase 0 — Architecture | Complete | — |
 | Phase 1 — Core Runtime | Complete | 112/112 |
@@ -25,7 +29,7 @@ A reusable, deterministic GitHub operations and intelligence platform — now fr
 
 **Total: 1495/1495 tests passing.**
 
-Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, Telegram contract hardening, final response-UX hardening, and the deterministic intelligence layer are post-Phase-8 batches.
+Figures are cumulative historical checkpoints. The complete system is the final 1,495-test frozen baseline; the security, reporting, repository/event, Telegram, Laya/LLM, and deterministic-intelligence work all landed after the original Phase 8 milestone.
 
 ## Status: FROZEN 🔒
 

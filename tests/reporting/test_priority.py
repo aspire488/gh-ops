@@ -132,7 +132,7 @@ class TestEventBlockContextAndLinks:
         lines = event_block(event).splitlines()
         assert lines[0].startswith("• [P1] owner/repo · CI")
 
-    def test_context_skips_resource_duplicate_and_empty_values(self):
+    def test_context_excludes_raw_status_and_resource(self):
         event = _event(
             metadata={
                 "resource": "owner/repo",
@@ -146,8 +146,9 @@ class TestEventBlockContextAndLinks:
         context = event_context(event)
         assert "package: requests" in context
         assert "alert severity: high" in context
-        assert "status: alert" in context
+        # Raw monitor bookkeeping never reaches the user-facing message.
         assert not any(line.startswith("resource:") for line in context)
+        assert not any(line.startswith("status:") for line in context)
 
     def test_build_report_groups_and_uses_event_block(self):
         action = _event(

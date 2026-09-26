@@ -45,6 +45,8 @@ from src.reporting.ledger import (
 )
 from src.reporting.model import (
     DEFAULT_PRIORITY_BY_SEVERITY,
+    GH_OPS_SYSTEM_REPOSITORY,
+    GH_OPS_SYSTEM_WORKFLOWS,
     PRIORITY_LABEL,
     PRIORITY_ORDER,
     PRIORITY_RANK,
@@ -62,11 +64,13 @@ from src.reporting.model import (
     SUBSYSTEM_RELEASE,
     SUBSYSTEM_REPOSITORY,
     SUBSYSTEM_SECURITY,
+    SUBSYSTEM_SYSTEM,
     SUBSYSTEM_WEEKLY,
     Priority,
     ReportEvent,
     Severity,
     default_priority,
+    is_gh_ops_system_workflow,
     parse_priority,
 )
 
@@ -94,7 +98,11 @@ __all__ = [
     "SUBSYSTEM_DEVELOPER",
     "SUBSYSTEM_DAILY",
     "SUBSYSTEM_WEEKLY",
+    "SUBSYSTEM_SYSTEM",
     "SUBSYSTEM_LABEL",
+    "GH_OPS_SYSTEM_REPOSITORY",
+    "GH_OPS_SYSTEM_WORKFLOWS",
+    "is_gh_ops_system_workflow",
     "event_key",
     "dedupe",
     "prioritize",

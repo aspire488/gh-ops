@@ -10,8 +10,19 @@ from src.reporting.model import (
     PRIORITY_LABEL,
     SEVERITY_EMOJI,
     SEVERITY_LABEL,
+    SEVERITY_ORDER,
+    SUBSYSTEM_CI,
+    SUBSYSTEM_DEVELOPER,
+    SUBSYSTEM_ENDPOINT,
     SUBSYSTEM_LABEL,
+    SUBSYSTEM_MONITORING,
+    SUBSYSTEM_OSS,
+    SUBSYSTEM_RELEASE,
+    SUBSYSTEM_REPOSITORY,
+    SUBSYSTEM_SECURITY,
+    SUBSYSTEM_SYSTEM,
     ReportEvent,
+    Severity,
 )
 from src.utils.time import format_ist_coverage, format_ist_date, format_ist_datetime
 
@@ -33,6 +44,8 @@ def report_name_for_events(events: Sequence[ReportEvent]) -> str:
 
 
 #: Metadata keys rendered as one-line context under the title (in order).
+#: Raw dumps (status, resource) are deliberately excluded: messages carry
+#: intelligence, not monitor bookkeeping.
 _CONTEXT_KEYS: tuple[str, ...] = (
     "branch",
     "workflow_name",
@@ -40,8 +53,6 @@ _CONTEXT_KEYS: tuple[str, ...] = (
     "package_name",
     "severity",
     "event_type",
-    "status",
-    "resource",
 )
 
 
@@ -65,11 +76,11 @@ def event_context(event: ReportEvent) -> list[str]:
             lines.append(f"package: {value}")
         elif key == "severity":
             lines.append(f"alert severity: {value}")
-        elif key == "status":
-            lines.append(f"status: {value}")
-        elif key == "resource" and str(value) != event.repository:
-            lines.append(f"resource: {value}")
     return lines
+
+
+#: Subsystems whose URL points at a workflow run (label the link for humans).
+_RUN_LINK_SUBSYSTEMS = frozenset({SUBSYSTEM_CI, SUBSYSTEM_SYSTEM})
 
 
 def event_block(event: ReportEvent) -> str:
@@ -79,9 +90,9 @@ def event_block(event: ReportEvent) -> str:
 
         • [P0] owner/repo · CI
           Title
-          context lines…
+          • context lines…
           description
-          https://…
+          Open run → https://…
     """
     lines: list[str] = []
     priority = PRIORITY_LABEL[event.effective_priority]
@@ -92,11 +103,12 @@ def event_block(event: ReportEvent) -> str:
         lines.append(f"  {event.title}")
     else:
         lines.append(f"• [{priority}] {header_target} · {subsystem}")
-    lines.extend(f"  {line}" for line in event_context(event))
+    lines.extend(f"  • {line}" for line in event_context(event))
     if event.description:
         lines.append(f"  {event.description}")
     if event.url:
-        lines.append(f"  {event.url}")
+        label = "Open run" if event.subsystem in _RUN_LINK_SUBSYSTEMS else "Open"
+        lines.append(f"  {label} → {event.url}")
     return "\n".join(lines)
 
 
@@ -119,23 +131,80 @@ def data_quality_block(data_quality: dict[str, Any] | None) -> str | None:
     return f"⚠️ Data quality: {detail}"
 
 
-def _repository_groups(
+#: Brief section order (after 🚨 Attention): header → subsystems covered.
+_BRIEF_SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("🛡️ Security", frozenset({SUBSYSTEM_SECURITY})),
+    (
+        "CI",
+        frozenset(
+            {
+                SUBSYSTEM_CI,
+                SUBSYSTEM_MONITORING,
+                SUBSYSTEM_ENDPOINT,
+                SUBSYSTEM_SYSTEM,
+            }
+        ),
+    ),
+    ("🧭 OSS", frozenset({SUBSYSTEM_OSS})),
+    ("🧑‍💻 Developer", frozenset({SUBSYSTEM_DEVELOPER})),
+    (
+        "🚀 Releases & Repositories",
+        frozenset({SUBSYSTEM_RELEASE, SUBSYSTEM_REPOSITORY}),
+    ),
+)
+
+_SEVERITY_COUNT_LABEL: dict[Severity, str] = {
+    Severity.ACTION_REQUIRED: "action required",
+    Severity.IMPORTANT: "important",
+    Severity.INFORMATION: "informational",
+    Severity.RESOLVED: "resolved",
+}
+
+
+def _brief_sections(
     ordered: Sequence[ReportEvent],
 ) -> list[tuple[str, list[ReportEvent]]]:
-    """Group events by repository, preserving priority order within each.
+    """Partition ordered events into the intelligence-report sections.
 
-    Repositories appear in the order of their highest-priority event so the
-    most urgent repo surfaces first.
+    Action-required events lead under 🚨 Attention regardless of subsystem;
+    everything else follows in the canonical topical order. Unknown
+    subsystems are grouped last (never dropped).
     """
-    groups: dict[str, list[ReportEvent]] = {}
-    order: list[str] = []
-    for event in ordered:
-        key = event.repository or event.subsystem
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(event)
-    return [(key, groups[key]) for key in order]
+    attention = [e for e in ordered if e.severity is Severity.ACTION_REQUIRED]
+    rest = [e for e in ordered if e.severity is not Severity.ACTION_REQUIRED]
+
+    sections: list[tuple[str, list[ReportEvent]]] = []
+    if attention:
+        sections.append(("🚨 Attention", attention))
+
+    classified: set[str] = set()
+    for header, subsystems in _BRIEF_SECTIONS:
+        items = [e for e in rest if e.subsystem in subsystems]
+        if items:
+            sections.append((header, items))
+            classified |= subsystems
+
+    leftovers: dict[str, list[ReportEvent]] = {}
+    for event in rest:
+        if event.subsystem not in classified:
+            leftovers.setdefault(event.subsystem or "monitoring", []).append(event)
+    for subsystem, items in leftovers.items():
+        header = SUBSYSTEM_LABEL.get(subsystem, subsystem.upper())
+        sections.append((header, items))
+    return sections
+
+
+def _overall_line(events: Sequence[ReportEvent]) -> str:
+    """One-line severity census for the foot of a brief."""
+    counts: dict[Severity, int] = {severity: 0 for severity in SEVERITY_ORDER}
+    for event in events:
+        counts[event.severity] = counts.get(event.severity, 0) + 1
+    parts = [
+        f"{counts[severity]} {_SEVERITY_COUNT_LABEL[severity]}"
+        for severity in SEVERITY_ORDER
+        if counts[severity]
+    ]
+    return f"Overall: {', '.join(parts)}" if parts else "Overall: quiet"
 
 
 def _omit_empty(lines: list[str]) -> list[str]:
@@ -175,12 +244,17 @@ def build_daily_brief(
     coverage_end: datetime | None = None,
     repository_count: int = 0,
     data_quality: dict[str, Any] | None = None,
+    headline: str | None = None,
 ) -> tuple[str, list[str]] | None:
     """Build the daily brief, or None when there is nothing meaningful.
 
-    Sections are repository-first; empty categories are omitted. A quiet run
-    with healthy collectors and no events returns None (no-op silence).
+    Sections follow the intelligence-report order (attention first, then
+    topical categories); empty sections are omitted. A quiet run with
+    healthy collectors and no events returns None (no-op silence).
     Data-quality issues surface only when collectors failed.
+    ``headline`` is an optional validated interpretation line (advisory
+    display only); when absent the brief is byte-identical to the
+    deterministic-only rendering.
     """
     ordered = prioritize(dedupe(events))
     quality_line = data_quality_block(data_quality)
@@ -195,15 +269,18 @@ def build_daily_brief(
         format_ist_datetime(end),
         f"Coverage: {format_ist_coverage(start, end)}",
     ]
+    if headline:
+        blocks.append(f"🧠 {headline}")
     if repository_count > 0:
         blocks.append(f"• {repository_count} repositories monitored")
 
-    for repo, items in _repository_groups(ordered):
-        blocks.append(f"▸ {repo}")
+    for header, items in _brief_sections(ordered):
+        blocks.append(header)
         blocks.extend(event_block(event) for event in items)
 
     if quality_line:
         blocks.append(quality_line)
+    blocks.append(_overall_line(ordered))
 
     return title, _omit_empty(blocks)
 
@@ -216,12 +293,14 @@ def build_weekly_brief(
     repository_count: int = 0,
     developer_events: int = 0,
     data_quality: dict[str, Any] | None = None,
+    headline: str | None = None,
 ) -> tuple[str, list[str]] | None:
     """Build the weekly brief, or None when empty.
 
     Only events not already briefed for this window should be passed by the
     caller. Empty sections are omitted; data-quality issues surface only when
-    collectors failed.
+    collectors failed. ``headline`` is an optional validated interpretation
+    line (advisory display only).
     """
     ordered = prioritize(dedupe(events))
     end = coverage_end or datetime.now(timezone.utc)
@@ -236,16 +315,19 @@ def build_weekly_brief(
         format_ist_datetime(end),
         f"Coverage: {format_ist_coverage(start, end)}",
     ]
+    if headline:
+        blocks.append(f"🧠 {headline}")
     if repository_count > 0:
         blocks.append(f"• {repository_count} repositories monitored")
     if developer_events > 0:
         blocks.append(f"• {developer_events} developer activities")
 
-    for repo, items in _repository_groups(ordered):
-        blocks.append(f"▸ {repo}")
+    for header, items in _brief_sections(ordered):
+        blocks.append(header)
         blocks.extend(event_block(event) for event in items)
 
     if quality_line:
         blocks.append(quality_line)
+    blocks.append(_overall_line(ordered))
 
     return title, _omit_empty(blocks)

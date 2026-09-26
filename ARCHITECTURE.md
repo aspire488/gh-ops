@@ -514,10 +514,20 @@ DEVELOPMENT ENVIRONMENT:
 
 GH-OPS PRODUCTION RUNTIME:
   GitHub Actions + Python + GitHub API + Telegram
-  → Deterministic only
-  → No external dependencies beyond runtime requirements
-  → No UEA, no MCPs, no agents, no LLM
+  → Deterministic core (collect → state → detect → format → deliver)
+  → Optional display-only interpretation (Laya System-1 + cloud LLM System-2)
+    when explicitly configured; a no-op in Actions, which configure no keys
+  → No UEA, no MCPs, no agents
 ```
+
+### MCP Audit (Opencode configuration)
+
+The OpenCode MCP inventory (`opencode.json`) was audited against gh-ops
+runtime and Actions needs. **No MCP is required by gh-ops runtime or GitHub
+Actions** — gh-ops has its own GitHub client, notification transport, and
+filesystem access, all first-party. No MCP credential or token from that
+configuration was copied into this repository. MCPs remain development-time
+tools per the boundary rule above.
 
 ---
 
@@ -1800,7 +1810,7 @@ accepts no inbound control, and calls no LLM, agent, MCP, or UEA runtime.
 
 | Topic | Produced by |
 |-------|-------------|
-| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
+| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only (includes `GH-OPS · SYSTEM` for gh-ops's own failing workflow runs; successful CI/system runs convert to `None` and send nothing) |
 | `oss_opportunities` | `notify_oss_opportunities` — ranked opportunities |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
 | `run_summary` | `notify_report` — daily/weekly briefs from the reporting ledger (toggle: `telegram.run_summary`) |
@@ -1980,6 +1990,67 @@ Implemented:
 **Verification:** full suite green; ruff clean on all batch-touched paths (only
 the 2 pre-existing findings in `tests/ci/test_workflows.py` remain).
 
+### Final Response UX + Product Hardening Batch ✅ COMPLETE
+
+**Goal:** Make every outbound message intelligence a human would keep reading:
+kill pipeline-noise categories at the source, classify gh-ops's own workflow
+runs, restructure briefs into a fixed attention-first order, and gate
+data-quality chatter on actual change.
+
+Implemented:
+- [x] `src/reporting/model.py` — `SUBSYSTEM_SYSTEM` ("system", label
+  `SYSTEM`), `GH_OPS_SYSTEM_REPOSITORY`, `GH_OPS_SYSTEM_WORKFLOWS` (the 7
+  gh-ops workflow display names), and `is_gh_ops_system_workflow()`.
+  Classification requires **both** the repository to be `aspire488/gh-ops`
+  **and** the workflow name to be in the enumerated set — a monitored repo
+  that merely reuses a name such as `Security` stays `ci`, and gh-ops runs
+  outside the enumerated set stay `ci`.
+- [x] `src/reporting/convert.py` — `_workflow_identity()` derives repository
+  and workflow name from monitor metadata, falling back to the first event's
+  `current` payload (`name`, `head_branch`); `_severity_for()` now:
+  recovery → `RESOLVED`, failure on `main`/`master` → `ACTION_REQUIRED`,
+  failure on other branches → `IMPORTANT`, and **successful CI runs convert
+  to `None` (silenced)** — no event, no message. System-workflow failures
+  route to `SUBSYSTEM_SYSTEM` and render as `🔴 GH-OPS · SYSTEM`; a matching
+  recovery renders `🟢 GH-OPS · SYSTEM` via the report path.
+- [x] `src/reporting/builders.py` — briefs rebuilt around a fixed section
+  order: `🚨 Attention` (ACTION_REQUIRED only, always first) → `🛡️ Security`
+  → `CI` (ci/monitoring/endpoint/system) → `🧭 OSS` → `🧑‍💻 Developer` →
+  `🚀 Releases & Repositories` → leftovers, followed by an `Overall:` line
+  (`Overall: n action required, …` / `Overall: quiet`). Event context renders
+  as curated `  • key: value` bullets from `_CONTEXT_KEYS` (raw `status` and
+  `resource` dumps removed); run links render as `Open run → {url}` for
+  ci/system subsystems and `Open → {url}` otherwise. The old
+  `_repository_groups` layout is gone.
+- [x] `src/jobs/jobs.py` — `_data_quality_event()` builds one merged
+  INFORMATION event with identity `data_quality:{incomplete}/{collectors}`;
+  `_gate_data_quality()` evaluates it on every daily/weekly brief, marks it
+  delivered immediately (it never enters the alerts-retry path), excludes it
+  from the pending block, and marks it briefed only when the brief was
+  actually delivered. An unchanged quality state is briefed once and then
+  silent; a changed state re-surfaces in the `⚠️ Data quality` line.
+- [x] `src/developer/activity.py` — `_workflow_repository()` derives the
+  repository from `{full_name}/run/{id}` resource keys; gh-ops's own
+  enumerated system-workflow runs are excluded from both the activity state
+  and emitted records (other repos reusing a workflow name are kept);
+  repository is now set on every workflow record. The predicate import is
+  lazy (module level must not import `src.reporting.model` — package init
+  pulls `convert.py`, creating a cycle).
+- [x] Tests — new `tests/reporting/test_convert.py` (12 tests: CI success
+  silence, recovery → RESOLVED, branch fallback, SYSTEM classification
+  including the negative cases); updated brief, priority, activity, jobs, and
+  Telegram-contract suites; contract goldens 16–18 added (system failure →
+  `🔴 GH-OPS · SYSTEM`, system success → silence, recovery →
+  `🟢 GH-OPS · SYSTEM`), 18 golden examples total.
+
+**Total: 1324/1324 passing**
+
+**Verification:** full suite green; `ruff` clean on all batch-touched paths;
+`compileall` clean over `src/` and `tests/`. `mypy` remains blocked by the
+pre-existing numpy-stub issue and is not claimed. Behavior only — no event
+identities, severity/priority keys, topic routing, MarkdownV2 escaping rules,
+lifecycle states, OSS/security dedup keys, or schedules were changed.
+
 ### Phase 9 — Security Hardening
 
 **Goal:** Verify all security constraints.
@@ -2012,11 +2083,77 @@ the 2 pre-existing findings in `tests/ci/test_workflows.py` remain).
 
 ---
 
+## N. Laya + LLM Interpretation Layer
+
+### Role
+
+Advisory, display-only interpretation for daily and weekly briefs: one `🧠`
+headline line. The layer is an **addition** — collection, normalization,
+ordering, deduplication, priority, lifecycle, persistence, delivery, and all
+contract outputs are untouched, and the brief is byte-identical to the
+deterministic rendering whenever interpretation is unavailable.
+
+### Pipeline
+
+```
+built brief (deterministic, unchanged)
+  → bounded digest (≤4000 chars)
+  → Laya System-1 decides focus: none | operations | security | oss
+      "none" → no LLM call at all
+  → cloud LLM System-2 writes one ≤60-word sentence, framed by the focus
+  → validate (length, printable, no raw JSON, no internal strings)
+  → 🧠 line inserted after Coverage — display only
+```
+
+### Components
+
+| File | Role |
+|------|------|
+| `src/intelligence/laya_adapter.py` | System-1: local Laya, lazy single checkpoint (~2.2 GB RSS, cached, loads only at brief time), allowed-label validation, fail-soft. `LAYA_ENABLED` default true (kill-switch). |
+| `src/intelligence/llm.py` | System-2: OpenAI-compatible cloud provider chain (`GH_OPS_LLM_PROVIDERS`, default groq → gemini), credentials from env only, strict output validation, provider failover. Third audited HTTP exit module (POST-only, chat-completions). |
+| `src/intelligence/interpret.py` | Orchestration: digest → Laya focus gate → LLM → validated headline. Never raises. |
+| `src/jobs/jobs.py::_brief_headline` | Fail-soft composition seam (jobs → intelligence is an allowed direction); builders accept `headline: str \| None`. |
+
+### Failure Semantics
+
+| Condition | Behaviour |
+|-----------|-----------|
+| No LLM keys / disabled | `summarize()` → `None`; brief unchanged |
+| Provider timeout / HTTP error / malformed output | next provider, then `None` |
+| Laya package missing or load fails | neutral focus; LLM still consulted |
+| Laya label outside allow-list | label discarded; `UNKNOWN`/deterministic result stands |
+| Laya decides `none` | no LLM call |
+
+### Constraints (measured, not estimated)
+
+- Laya: idle ~22 MB; one checkpoint ~2.19 GB RSS; cold load ~6.3 s; CPU
+  inference ~0.36 s; CUDA unavailable with the CPU-only torch build. One
+  checkpoint maximum, never all-three preload, never at import time, never in
+  Actions. The checkpoint ships invalid temperatures, so its numeric score is
+  an **uncalibrated model score** — never presented as confidence.
+- LLM: cloud only (no Ollama). Live-verified providers: Groq
+  (`openai/gpt-oss-120b`) and Gemini (`gemini-3.8-flash`). KIO's NVIDIA
+  endpoint is end-of-life (HTTP 410); OpenRouter/Together/Cerebras/SambaNova/
+  Fireworks were unavailable (401/402/412) at verification time.
+- Credentials: environment only (gitignored `.env`); never committed, never
+  logged (covered by tests).
+
+### Verification
+
+43 new tests (llm 18, laya/interpret 21, brief headline 4) → **1367/1367
+passing**; `ruff` clean on all batch-touched paths; `compileall` clean; one
+live end-to-end run confirmed Laya triage → cloud LLM → validated headline.
+
+---
+
 ## Architectural Invariants
 
 1. **Read-only by default.** No GitHub writes without explicit human approval via `workflow_dispatch`.
 2. **Single API exit point.** All GitHub HTTP calls go through `src/github/client.py`.
-3. **Deterministic.** Same input → same output. No randomness, no LLM calls.
+3. **Deterministic.** Same input → same output. No randomness in the event
+   pipeline. The optional interpretation layer (Laya/LLM, section N) is
+   display-only, fails to `None`, and never influences what the deterministic
+   pipeline produces.
 4. **Partial failure is normal.** One bad repo does not kill the run.
 5. **State is JSON.** No external databases in runtime. Repository-backed via Actions cache.
 6. **Workflows are thin.** Logic lives in Python, not YAML. A workflow's only
@@ -2030,7 +2167,9 @@ the 2 pre-existing findings in `tests/ci/test_workflows.py` remain).
 11. **Development plane is separate.** UEA, skills, MCPs, agents are for building gh-ops, not running it.
 12. **OSS is first-class.** Dedicated workflow, dedicated scoring, dedicated state.
 13. **Scoring is transparent.** Explicit weights, explicit signals, stable tie-breaking.
-14. **No unnecessary dependencies.** Runtime needs: requests + pyyaml + pytest. That's it.
+14. **No unnecessary dependencies.** Runtime needs: requests + pyyaml + pytest.
+    Laya is an optional extra (`pip install .[laya]`, ~2.2 GB checkpoint) used
+    only by the interpretation layer and never installed in Actions.
 15. **Dependency direction is one-way.** `core/github → state/events → monitors /
     intelligence / developer → notifications`, with `src/jobs/` composing them
     from above. No lower layer imports `src.jobs` except inside a `__main__`

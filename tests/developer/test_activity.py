@@ -1,22 +1,22 @@
 """Tests for developer activity extraction (Phase 6)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+
 import pytest
 
-from src.core.models import CurrentState, FieldChange, ResourceEvent, EventType
+from src.core.models import CurrentState, EventType, ResourceEvent
 from src.developer.activity import (
     ActivityRecord,
     ActivityType,
     DataQuality,
-    extract_activity,
-    filter_activity,
-    deduplicate_activity,
-    summarize_activity,
     _extract_repo_name,
     _parse_ts,
+    deduplicate_activity,
+    extract_activity,
+    filter_activity,
+    summarize_activity,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -373,6 +373,53 @@ class TestExtractWorkflowActivity:
         records, quality = extract_activity(state, username="testuser")
 
         assert records[0].state == "failure"
+
+    def test_workflow_record_derives_repository(self):
+        wf = _make_workflow(conclusion="success")
+        state = _make_state(workflows={"testowner/testrepo/run/7": wf})
+        records, _ = extract_activity(state, username="testuser")
+
+        workflow_records = [
+            r for r in records if r.activity_type == ActivityType.WORKFLOW_RUN
+        ]
+        assert workflow_records
+        assert workflow_records[0].repository == "testowner/testrepo"
+
+    def test_ghops_system_workflow_excluded_from_state(self):
+        wf = _make_workflow(run_id=12, name="Security", conclusion="failure")
+        state = _make_state(workflows={"aspire488/gh-ops/run/12": wf})
+        records, _ = extract_activity(state, username="testuser")
+
+        assert not [r for r in records if r.activity_type == ActivityType.WORKFLOW_RUN]
+
+    def test_ghops_system_workflow_excluded_from_events(self):
+        event = ResourceEvent(
+            event_type=EventType.NEW,
+            resource_type="workflows",
+            resource_id="aspire488/gh-ops/run/12",
+            current=_make_workflow(run_id=12, name="Daily", conclusion="success"),
+        )
+        records, _ = extract_activity(_make_state(), (event,), username="testuser")
+
+        assert not [r for r in records if r.activity_type == ActivityType.WORKFLOW_RUN]
+
+    def test_ghops_unlisted_workflow_kept(self):
+        wf = _make_workflow(run_id=13, name="Deploy")
+        state = _make_state(workflows={"aspire488/gh-ops/run/13": wf})
+        records, _ = extract_activity(state, username="testuser")
+
+        assert [r for r in records if r.activity_type == ActivityType.WORKFLOW_RUN]
+
+    def test_system_workflow_name_on_other_repo_kept(self):
+        wf = _make_workflow(run_id=3, name="Security")
+        state = _make_state(workflows={"testowner/testrepo/run/3": wf})
+        records, _ = extract_activity(state, username="testuser")
+
+        workflow_records = [
+            r for r in records if r.activity_type == ActivityType.WORKFLOW_RUN
+        ]
+        assert workflow_records
+        assert workflow_records[0].repository == "testowner/testrepo"
 
 
 # ── Data quality ─────────────────────────────────────────────────

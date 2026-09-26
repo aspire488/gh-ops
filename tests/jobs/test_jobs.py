@@ -745,6 +745,83 @@ class TestPersistentConditionSuppression:
         assert len(persistent_ci_alert) == 2
 
 
+class TestDailyBriefDataQualitySilence:
+    """An unchanged data-quality warning is briefed once, then stays silent."""
+
+    def test_quality_reported_once_then_silent(self, pipeline, monkeypatch):
+        from src.core.models import CurrentState
+
+        degraded = CurrentState(
+            update_log={
+                "repos": {
+                    "status": "failure",
+                    "observed_at": "2026-09-24T12:00:00+00:00",
+                    "error": "boom",
+                    "item_count": 0,
+                }
+            }
+        )
+        def fake_apply(prev, snap):
+            # Keep the previous ledger (run 2 reloads it) but degrade health.
+            return (
+                CurrentState(
+                    resources=dict(prev.resources),
+                    update_log=dict(degraded.update_log),
+                ),
+                (),
+            )
+
+        monkeypatch.setattr(jobs_module, "apply_and_diff", fake_apply)
+        monkeypatch.setattr(jobs_module, "evaluate_events", lambda *a, **k: [])
+        monkeypatch.setattr(jobs_module, "run_monitors", lambda s, c: [])
+        monkeypatch.setattr(jobs_module, "summarize_results", lambda results: {"total": 0})
+        monkeypatch.setattr(
+            jobs_module, "notify_monitor_alerts", lambda results, **kw: _result_ok()
+        )
+
+        briefs: list[tuple[str, list[str]]] = []
+        from types import SimpleNamespace
+
+        from src.notifications import telegram as telegram_module
+
+        monkeypatch.setattr(
+            telegram_module,
+            "load_telegram_config",
+            lambda cfg: SimpleNamespace(run_summary=True),
+        )
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_report",
+            lambda title, blocks, **kw: (
+                briefs.append((title, list(blocks))) or _result_ok()
+            ),
+        )
+
+        result = jobs_module.job_daily()
+        assert result.success is True
+        assert len(briefs) == 1
+        assert any("Data quality" in line for line in briefs[0][1])
+
+        ledger_after = dict(
+            pipeline["persisted"].resources.get("reporting_events", {})
+        )
+        assert "data_quality:1/1" in ledger_after
+        entry = ledger_after["data_quality:1/1"]
+        assert entry["briefed_daily"] is True
+        assert entry["delivered"] is True
+
+        def load_with_ledger():
+            state = _empty_state()
+            state.resources["reporting_events"] = ledger_after
+            return state
+
+        monkeypatch.setattr(jobs_module, "load_previous_state", load_with_ledger)
+        second = jobs_module.job_daily()
+        assert second.success is True
+        # The same unchanged quality state must not re-send the brief.
+        assert len(briefs) == 1
+
+
 class TestNotificationFailureIsolation:
     def test_alert_delivery_failure_does_not_fail_the_job(self, pipeline, monkeypatch):
         """A delivery problem must never discard collected state."""

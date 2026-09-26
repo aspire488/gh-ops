@@ -14,8 +14,10 @@ from src.reporting.model import (
     SUBSYSTEM_RELEASE,
     SUBSYSTEM_REPOSITORY,
     SUBSYSTEM_SECURITY,
+    SUBSYSTEM_SYSTEM,
     ReportEvent,
     Severity,
+    is_gh_ops_system_workflow,
 )
 
 #: Monitor names that belong to the alerts batch (immediate Telegram path).
@@ -27,6 +29,7 @@ MONITORING_SUBSYSTEMS = frozenset(
         SUBSYSTEM_REPOSITORY,
         SUBSYSTEM_ENDPOINT,
         SUBSYSTEM_SECURITY,
+        SUBSYSTEM_SYSTEM,
     }
 )
 
@@ -69,9 +72,48 @@ def _repository_from_resource(resource: str) -> str:
     return resource
 
 
+def _workflow_identity(result: MonitorResult) -> tuple[str, str]:
+    """Repository and workflow name for a CI/workflows monitor result.
+
+    Both live in different places depending on how the event was produced:
+    resource id / metadata for fresh evaluation, the triggering workflow_run
+    payload (``current["name"]``) for CHANGED conclusions.
+    """
+    metadata = result.metadata or {}
+    repository = _repository_from_resource(result.resource) or str(
+        metadata.get("repository") or ""
+    )
+    workflow_name = str(metadata.get("workflow_name") or "")
+    if not workflow_name and result.events:
+        current = getattr(result.events[0], "current", None)
+        if isinstance(current, dict):
+            workflow_name = str(current.get("name") or "")
+    return repository, workflow_name
+
+
+def _branch_for(result: MonitorResult) -> str:
+    """Head branch, falling back to the triggering event payload.
+
+    ci.py only sets ``branch`` metadata on NEW failures; CHANGED events carry
+    the branch solely in the workflow_run payload.
+    """
+    metadata = result.metadata or {}
+    branch = str(metadata.get("branch") or metadata.get("head_branch") or "")
+    if branch:
+        return branch
+    if result.events:
+        current = getattr(result.events[0], "current", None)
+        if isinstance(current, dict):
+            return str(current.get("head_branch") or current.get("branch") or "")
+    return ""
+
+
 def _subsystem_for(result: MonitorResult) -> str:
     monitor = (result.monitor or "").lower()
     if monitor in ("ci", "workflows"):
+        repository, workflow_name = _workflow_identity(result)
+        if is_gh_ops_system_workflow(repository, workflow_name):
+            return SUBSYSTEM_SYSTEM
         return SUBSYSTEM_CI
     if monitor == "release":
         return SUBSYSTEM_RELEASE
@@ -104,17 +146,15 @@ def _severity_for(result: MonitorResult) -> Severity | None:
         return None
 
     if monitor == "ci" or result.category.value == "ci":
-        if event_type == "recovery" or (
-            result.status is MonitorStatus.OK and event_type == "success"
-        ):
+        # Recoveries surface as resolved; successful runs are silent
+        # (a green build is not intelligence).
+        if event_type == "recovery":
             return Severity.RESOLVED
         if result.status is MonitorStatus.ALERT:
-            branch = str(metadata.get("branch") or metadata.get("head_branch") or "")
+            branch = _branch_for(result)
             if branch in ("main", "master"):
                 return Severity.ACTION_REQUIRED
             return Severity.IMPORTANT
-        if result.status is MonitorStatus.CHANGED:
-            return None
         return None
 
     if monitor == "release" or result.category.value == "release":
@@ -186,6 +226,10 @@ def report_event_from_monitor(result: MonitorResult) -> ReportEvent | None:
             for key in ("branch", "head_branch", "workflow_name", "conclusion", "html_url"):
                 if key in current and current[key] not in (None, ""):
                     context.setdefault(key, current[key])
+            if (result.monitor or "").lower() in ("ci", "workflows"):
+                name = str(current.get("name") or "")
+                if name:
+                    context.setdefault("workflow_name", name)
             if not url:
                 url = str(current.get("html_url") or current.get("url") or "")
 

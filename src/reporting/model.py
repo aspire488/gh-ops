@@ -110,6 +110,7 @@ SUBSYSTEM_OSS = "oss"
 SUBSYSTEM_DEVELOPER = "developer"
 SUBSYSTEM_DAILY = "daily"
 SUBSYSTEM_WEEKLY = "weekly"
+SUBSYSTEM_SYSTEM = "system"
 
 #: Short display labels used in Telegram event blocks.
 SUBSYSTEM_LABEL: dict[str, str] = {
@@ -123,7 +124,34 @@ SUBSYSTEM_LABEL: dict[str, str] = {
     SUBSYSTEM_DEVELOPER: "DEV",
     SUBSYSTEM_DAILY: "DAILY",
     SUBSYSTEM_WEEKLY: "WEEKLY",
+    SUBSYSTEM_SYSTEM: "SYSTEM",
 }
+
+#: gh-ops monitors its own repository; its workflow runs are the product's
+#: own execution, not developer activity. Only failures/recoveries surface
+#: (successes are silenced by conversion) as ``GH-OPS · SYSTEM`` events.
+GH_OPS_SYSTEM_REPOSITORY = "aspire488/gh-ops"
+
+#: The gh-ops workflows whose runs are system events (spec enumeration).
+GH_OPS_SYSTEM_WORKFLOWS = frozenset(
+    {
+        "CI",
+        "Daily",
+        "Manual",
+        "Monitoring",
+        "OSS Hunter",
+        "Security",
+        "Weekly Report",
+    }
+)
+
+
+def is_gh_ops_system_workflow(repository: str, workflow_name: str) -> bool:
+    """True when a workflow run belongs to gh-ops itself."""
+    return (
+        repository == GH_OPS_SYSTEM_REPOSITORY
+        and workflow_name in GH_OPS_SYSTEM_WORKFLOWS
+    )
 
 
 @dataclass(frozen=True)

@@ -13,16 +13,15 @@ CRITICAL SEMANTICS:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from src.core.events import (
     diff_resources,
-    events_by_event_type,
     events_by_resource_type,
 )
-from src.core.models import CurrentState, EventType, HistoryEntry, ResourceEvent
+from src.core.models import CurrentState, EventType, ResourceEvent
 from src.utils.logging import get_logger
 from src.utils.time import parse_github_timestamp
 
@@ -127,7 +126,7 @@ class DataQuality:
 # ── Activity extraction ──────────────────────────────────────────
 
 
-def _parse_ts(value: Any) -> Optional[datetime]:
+def _parse_ts(value: Any) -> datetime | None:
     """Safely parse a timestamp string to datetime."""
     if not value or not isinstance(value, str):
         return None
@@ -172,7 +171,6 @@ def _extract_issue_activity(
         state = data.get("state", "")
         url = data.get("html_url", "")
         labels = data.get("labels", [])
-        comments = data.get("comments", 0)
         author_association = data.get("author_association", "")
 
         item_id = f"{repo}#{number}" if repo else f"#{number}"
@@ -236,24 +234,27 @@ def _extract_issue_activity(
             if "comments" in changes:
                 after_comments = changes["comments"].after
                 before_comments = changes["comments"].before
-                if isinstance(after_comments, int) and isinstance(before_comments, int):
-                    if after_comments > before_comments:
-                        updated_at = _parse_ts(data.get("updated_at"))
-                        if updated_at:
-                            records.append(ActivityRecord(
-                                activity_type=ActivityType.ISSUE_COMMENTED,
-                                timestamp=updated_at,
-                                repository=repo,
-                                item_id=item_id,
-                                title=title,
-                                state=state,
-                                url=url,
-                                meta={
-                                    "comments_added": after_comments - before_comments,
-                                    "total_comments": after_comments,
-                                    "author_association": author_association,
-                                },
-                            ))
+                if (
+                    isinstance(after_comments, int)
+                    and isinstance(before_comments, int)
+                    and after_comments > before_comments
+                ):
+                    updated_at = _parse_ts(data.get("updated_at"))
+                    if updated_at:
+                        records.append(ActivityRecord(
+                            activity_type=ActivityType.ISSUE_COMMENTED,
+                            timestamp=updated_at,
+                            repository=repo,
+                            item_id=item_id,
+                            title=title,
+                            state=state,
+                            url=url,
+                            meta={
+                                "comments_added": after_comments - before_comments,
+                                "total_comments": after_comments,
+                                "author_association": author_association,
+                            },
+                        ))
 
     return records
 
@@ -424,15 +425,27 @@ def _extract_release_activity(
     return records
 
 
+def _workflow_repository(resource_id: str) -> str:
+    """Derive owner/repo from a workflow_run resource id (``o/r/run/123``)."""
+    if not resource_id or "/run/" not in resource_id:
+        return ""
+    return resource_id.rsplit("/run/", 1)[0]
+
+
 def _extract_workflow_activity(
     events: tuple[ResourceEvent, ...],
     username: str | None,
 ) -> list[ActivityRecord]:
     """Extract workflow run activity from Phase 3 events.
 
-    Uses run_started_at or created_at for timing.
+    Uses run_started_at or created_at for timing.     gh-ops's own workflow
+    runs are excluded: they are system execution, not developer activity.
     """
     records: list[ActivityRecord] = []
+
+    # Lazy import: src.reporting's package init pulls in convert.py, which
+    # imports this module — a module-level import would cycle.
+    from src.reporting.model import is_gh_ops_system_workflow
 
     for event in events:
         data = event.current or event.previous or {}
@@ -445,6 +458,10 @@ def _extract_workflow_activity(
         url = data.get("html_url", "")
         event_type_name = data.get("event", "")
         head_branch = data.get("head_branch", "")
+        repository = _workflow_repository(event.resource_id)
+
+        if is_gh_ops_system_workflow(repository, str(name)):
+            continue
 
         item_id = f"workflow/{data.get('id', 0)}"
 
@@ -454,7 +471,7 @@ def _extract_workflow_activity(
                 records.append(ActivityRecord(
                     activity_type=ActivityType.WORKFLOW_RUN,
                     timestamp=ts,
-                    repository="",
+                    repository=repository,
                     item_id=item_id,
                     title=name,
                     state=conclusion or status,

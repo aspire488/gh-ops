@@ -1,7 +1,7 @@
 """Transport-boundary UX contract tests for every Telegram path jobs use.
 
 Captures the exact outbound HTTP payload (chat_id, text, parse_mode) plus the
-NotificationResult.topic, without any network I/O. Covers the 15 golden
+NotificationResult.topic, without any network I/O. Covers the 18 golden
 examples, silence, at-least-once reporting, MarkdownV2 final-payload escaping,
 topic routing, product language, and job fatal-failure isolation.
 """
@@ -106,7 +106,7 @@ def _assert_no_forbidden(text: str) -> None:
         assert needle not in text, f"forbidden string {needle!r} reached Telegram: {text!r}"
 
 
-# ── 15 golden examples at the transport boundary ─────────────────
+# ── 18 golden examples at the transport boundary ─────────────────
 
 
 class TestGoldenExamples:
@@ -339,6 +339,67 @@ class TestGoldenExamples:
         assert result.skipped
         assert payloads == []
         assert capture.session.call_count == 0
+
+    def test_16_system_failure_routes_to_alerts(self):
+        """gh-ops's own failing workflow announces as GH-OPS · SYSTEM."""
+        capture = CaptureBoundary()
+        result, payloads = capture.capture_notify(
+            notify_monitor_alerts,
+            [
+                make_monitor_result(
+                    MonitorStatus.ALERT,
+                    monitor="ci",
+                    resource="aspire488/gh-ops/run/123",
+                    summary="Security workflow failed",
+                    metadata={
+                        "event_type": "failure",
+                        "workflow_name": "Security",
+                        "branch": "master",
+                    },
+                )
+            ],
+        )
+        assert result.ok
+        assert payloads and payloads[0].topic == TOPIC_ALERTS
+        assert payloads[0].text.startswith(f"*{esc('🔴 GH-OPS · SYSTEM')}*")
+        _assert_no_forbidden(payloads[0].text)
+
+    def test_17_system_success_is_silence(self):
+        """A successful gh-ops workflow run produces no message at all."""
+        capture = CaptureBoundary()
+        result, payloads = capture.capture_notify(
+            notify_monitor_alerts,
+            [
+                make_monitor_result(
+                    MonitorStatus.OK,
+                    monitor="ci",
+                    resource="aspire488/gh-ops/run/124",
+                    summary="Daily workflow succeeded",
+                    metadata={"event_type": "success", "workflow_name": "Daily"},
+                )
+            ],
+        )
+        assert result.skipped
+        assert result.skip_reason == "nothing to send"
+        assert payloads == []
+        assert capture.session.call_count == 0
+
+    def test_18_system_recovery_is_resolved(self):
+        capture = CaptureBoundary()
+        result, payloads = capture.capture_notify(
+            notify_monitor_alerts,
+            [
+                make_monitor_result(
+                    MonitorStatus.OK,
+                    monitor="ci",
+                    resource="aspire488/gh-ops/run/125",
+                    summary="Monitoring workflow recovered",
+                    metadata={"event_type": "recovery", "workflow_name": "Monitoring"},
+                )
+            ],
+        )
+        assert result.ok
+        assert payloads[0].text.startswith(f"*{esc('🟢 GH-OPS · SYSTEM')}*")
 
 
 # ── Silence contract ─────────────────────────────────────────────

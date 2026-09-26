@@ -19,10 +19,12 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
 | Security Intelligence batch | ✅ Complete | 1150/1150 tests |
 | Reporting + product-hardening batch | ✅ Complete | 1260/1260 tests |
+| Final intelligence hardening batch | ✅ Complete | 1324/1324 tests |
+| Laya + LLM interpretation batch | ✅ Complete | 1367/1367 tests |
 
-**Total: 1260/1260 tests passing.**
+**Total: 1367/1367 tests passing.**
 
-Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, and Telegram contract hardening are post-Phase-8 batches.
+Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, Telegram contract hardening, and final response-UX hardening are post-Phase-8 batches.
 
 ## Architecture
 
@@ -65,7 +67,7 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
-Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and weekly runs may send briefs built from the shared reporting ledger (only when meaningful events exist; a quiet run sends nothing). Completion summaries (run/oss/security) are no longer sent by jobs; their formatters remain exported for API compatibility. Repository counts come only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery; recovery events clear the mark and may send a RESOLVED report).
+Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and weekly runs may send briefs built from the shared reporting ledger (only when meaningful events exist; a quiet run sends nothing). Briefs render in a fixed attention-first order: 🚨 Attention (action-required only) → 🛡️ Security → CI → 🧭 OSS → 🧑‍💻 Developer → 🚀 Releases & Repositories → ⚠️ Data quality, closed by an `Overall:` line. Data-quality warnings are ledger-gated: each distinct state is briefed once, then silent until it changes. Successful CI runs (and gh-ops's own workflow runs) are silenced at conversion; failures of gh-ops's own enumerated workflows render as `GH-OPS · SYSTEM` alerts. Completion summaries (run/oss/security) are no longer sent by jobs; their formatters remain exported for API compatibility. Repository counts come only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery; recovery events clear the mark and may send a RESOLVED report).
 
 ## Local Secrets (`.env`)
 
@@ -83,6 +85,12 @@ cp .env.example .env
 |----------|---------|-------|
 | `TELEGRAM_BOT_TOKEN` | Phase 7 Telegram delivery | The **only** variable consulted for the bot token |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Phases 2–6 GitHub collection | Either name works |
+| `GH_OPS_LLM_ENABLED` | Brief interpretation | Kill-switch (default true); with no keys configured nothing is ever called |
+| `GH_OPS_LLM_PROVIDERS` | Brief interpretation | Provider try-order, default `groq,gemini` |
+| `GH_OPS_LLM_TIMEOUT_S` | Brief interpretation | Per-request timeout, default `12` |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Groq cloud provider | Base URL has a built-in default |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Gemini cloud provider | Base URL has a built-in default; model `gemini-3.8-flash` verified live |
+| `LAYA_ENABLED` | Laya System-1 triage | Default true; checkpoint loads lazily on first brief and is cached |
 
 Loading rules (`src/utils/env.py`, standard library only — no new dependency):
 
@@ -96,6 +104,36 @@ Loading rules (`src/utils/env.py`, standard library only — no new dependency):
 `python scripts/check_telegram.py` reports readiness using booleans, counts, and
 the token length only — it never prints the token, so its output is safe to paste
 into a terminal or a CI log. It exits non-zero when delivery is not ready.
+
+## Interpretation Layers (Laya + cloud LLM)
+
+Daily and weekly briefs gain one advisory `🧠` headline line — an addition, not
+a replacement: event collection, ordering, deduplication, priority, lifecycle,
+delivery, and every contract test stay exactly as they were, and the brief is
+byte-identical to the deterministic rendering whenever interpretation is
+unavailable.
+
+```
+built brief (deterministic)
+  → Laya System-1 decides focus: none | operations | security | oss
+      (local, lazy, one ~2.2 GB checkpoint, cached, runs only at brief time)
+  → "none" skips the LLM; otherwise the cloud LLM writes one ≤60-word sentence
+      (provider chain groq → gemini, OpenAI-compatible, env credentials)
+  → strict validation (length, printable text, no JSON, no internal strings)
+  → 🧠 line inserted after Coverage, display-only
+```
+
+Rules:
+
+- Fully functional with neither layer: no keys, dead provider, timeout, or a
+  missing Laya install all collapse to `None` and the brief renders unchanged.
+- Laya's numeric score is an **uncalibrated model score**, never a probability.
+- Laya is advisory: its label is validated against a fixed allow-list before
+  use; it never mutates state, executes anything, or alters event output.
+- Credentials come from the environment only (`.env` is gitignored; never
+  committed, never logged). No Ollama, no local LLM — cloud providers only.
+- GitHub Actions runs stay deterministic: workflows configure no LLM keys and
+  never install the Laya extra, so interpretation is a no-op there by design.
 
 ## GitHub Authentication
 
@@ -419,7 +457,7 @@ telegram:
 
 | Topic | Entry point |
 |-------|-------------|
-| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only |
+| `alerts` | `notify_monitor_alerts` — ALERT and ERROR monitor results only (includes `GH-OPS · SYSTEM` for gh-ops's own failing workflow runs; successful CI/system runs send nothing) |
 | `oss_opportunities` | `notify_oss_opportunities` |
 | `developer_report` | `notify_developer_report` — a Phase 6 `DeveloperReport` |
 | `run_summary` | `notify_report` — daily/weekly briefs built from the reporting ledger (`telegram.run_summary`) |
@@ -593,6 +631,7 @@ or contacts GitHub.
 | `core/rate_limit.py` | 17 | Tracker, headers, backoff |
 | `core/dispatcher.py` | 7 | Job registration, execution |
 | `core/dispatcher.py` (CLI) | 24 | Exit codes, env-var job selection, module + `run_local.py` entry points |
+| `core/lifecycle.py` | 17 | Repository lifecycle tracking |
 | `github/auth.py` | 15 | Token resolution, AuthConfig |
 | `github/client.py` | 16 | GET-only, retry, pagination, ETags |
 | `github/models.py` | 19 | 8 dataclasses, from_api, to_dict |
@@ -602,7 +641,7 @@ or contacts GitHub.
 | `monitors/release.py` | 12 | Release event evaluation, prerelease/draft filtering |
 | `monitors/endpoint.py` | 26 | Security validation, config parsing, URL checks |
 | `monitors/__init__.py` | 16 | Registry, event dispatch, summary |
-| `monitors/monitor.py` | 15 | MonitorResult model, classification, properties, SECURITY category |
+| `monitors/monitor.py` | 14 | MonitorResult model, classification, properties, SECURITY category |
 | `monitors/*` (properties) | 5 | Property tests for MonitorResult invariants |
 | `utils/text.py` | 23 | MarkdownV2 escaping, split, truncate |
 | `utils/time.py` | 16 | Timestamps, relative time |
@@ -613,7 +652,7 @@ or contacts GitHub.
 | `intelligence/oss/scorer.py` | 26 | 7 scoring signals, normalization, tie-breaking |
 | `intelligence/oss/dedup.py` | 18 | Identity dedup, provenance merge, idempotency |
 | `intelligence/oss/hunter.py` | 14 | Orchestrator, metadata enrichment, partial failure |
-| `developer/activity.py` | 38 | Activity extraction, filtering, dedup, data quality |
+| `developer/activity.py` | 43 | Activity extraction, filtering, dedup, data quality |
 | `developer/statistics.py` | 21 | Counts, repo breakdown, periods, active days |
 | `developer/reports.py` | 16 | Report generation, periods, formatting |
 | `notifications/telegram.py` (config) | 48 | Token resolution, config validation, chat routing, summary toggles |
@@ -624,12 +663,17 @@ or contacts GitHub.
 | `intelligence/security/*` | 24 | Severity ranks, findings, radar, report shape |
 | `monitors/security.py` | 17 | Alert evaluation, registry wiring, disabled/error paths |
 | `notifications/security report` | 15 | Security formatters, toggles, topic routing, isolation |
-| `jobs/jobs.py` | 50 | Six jobs, dispatch, partial failure, delivery isolation, OSS + security dedup |
-| `jobs/*` (architecture) | 17 | Dependency direction, no HTTP/LLM/eval in the job layer |
+| `jobs/jobs.py` | 53 | Six jobs, dispatch, partial failure, delivery isolation, OSS + security dedup |
+| `jobs/*` (architecture) | 18 | Dependency direction, no HTTP/LLM/eval in the job layer |
+| `reporting/*` | 68 | Conversion, priority, ledger, briefs (attention-first sections, optional LLM headline) |
+| `notifications/telegram.py` (contract) | 38 | Transport-boundary golden examples, silence, topic routing |
+| `security/test_security_hardening.py` | 40 | Phase 9 static verification: GET-only, no eval/shell, redaction |
+| `intelligence/llm.py` | 18 | Output validation, env config, provider failover, key safety |
+| `intelligence/laya_adapter.py` + `interpret.py` | 21 | System-1 gate, allowed-label validation, Laya → LLM orchestration |
 | `.github/workflows/*` | 220 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
-| **Total** | **1260** | |
+| **Total** | **1367** | |
 
-The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, and repository/event lifecycle hardening.
+The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, repository/event lifecycle hardening, and the final response-UX batch (attention-first briefs, gh-ops system-workflow classification, data-quality ledger gating).
 
 ## Project Structure
 

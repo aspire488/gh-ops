@@ -80,7 +80,7 @@ from src.reporting.ledger import (
     state_with_ledger,
     undelivered_events,
 )
-from src.reporting.model import SUBSYSTEM_DEVELOPER, ReportEvent
+from src.reporting.model import SUBSYSTEM_DAILY, SUBSYSTEM_DEVELOPER, ReportEvent, Severity
 from src.utils.logging import get_logger
 
 logger = get_logger("jobs")
@@ -379,6 +379,72 @@ def _deliver_developer_events(
     return delivery, ledger
 
 
+def _data_quality_event(
+    quality_id: str,
+    incomplete: int,
+    collectors: int,
+    observed_at: datetime,
+) -> ReportEvent:
+    """Ledger representation of a data-quality warning for brief gating."""
+    return ReportEvent(
+        subsystem=SUBSYSTEM_DAILY,
+        event_type="data_quality",
+        severity=Severity.INFORMATION,
+        title=f"Data quality: {incomplete}/{collectors} collectors incomplete",
+        identity=quality_id,
+        timestamp=observed_at.isoformat(),
+        source="daily",
+        metadata={"incomplete": incomplete, "collectors": collectors},
+    )
+
+
+def _gate_data_quality(
+    ledger: dict[str, dict],
+    data_quality: dict[str, Any] | None,
+    pending: list[ReportEvent],
+    kind: str,
+    now: datetime,
+) -> tuple[dict[str, dict], bool, list[ReportEvent], str]:
+    """Ledger-ize the data-quality note so unchanged issues stay silent.
+
+    The note is merged as an INFORMATION event and immediately marked
+    delivered (it is brief content, never an alerts-path retry). It shows
+    in a brief only when this window has not yet briefed the same counts;
+    a healthy or unchanged run re-sends nothing.
+
+    Returns ``(ledger, show_quality, pending, quality_id)``.
+    """
+    if not data_quality:
+        return ledger, False, pending, ""
+    incomplete = int(data_quality.get("incomplete") or 0)
+    collectors = int(data_quality.get("collectors") or 0)
+    if incomplete <= 0 or collectors <= 0:
+        return ledger, False, pending, ""
+
+    quality_id = f"data_quality:{incomplete}/{collectors}"
+    ledger = merge_events(
+        ledger, [_data_quality_event(quality_id, incomplete, collectors, now)]
+    )
+    show_quality = not bool(ledger.get(quality_id, {}).get(f"briefed_{kind}"))
+    ledger = mark_delivered(ledger, [quality_id])
+    pending = [event for event in pending if event.event_type != "data_quality"]
+    return ledger, show_quality, pending, quality_id
+
+
+def _brief_headline(title: str, blocks: list[str]) -> str | None:
+    """Laya System-1 -> cloud LLM System-2 headline for a built brief.
+
+    Display-only and fail-soft: any problem returns None and the brief
+    renders exactly as the deterministic pipeline produced it.
+    """
+    try:
+        from src.intelligence.interpret import interpret_brief
+
+        return interpret_brief("\n".join([title, *blocks]))
+    except Exception:
+        return None
+
+
 def _maybe_send_daily_brief(
     job: str,
     config: Any,
@@ -419,26 +485,41 @@ def _maybe_send_daily_brief(
         )
     data_quality = summarize_data_quality(quality_entries)
 
+    ledger, show_quality, pending, quality_id = _gate_data_quality(
+        ledger, data_quality, pending, "daily", end
+    )
+
     built = build_daily_brief(
         pending,
         coverage_start=start,
         coverage_end=end,
         repository_count=repository_count,
-        data_quality=data_quality,
+        data_quality=data_quality if show_quality else None,
     )
     if built is None:
         return None, ledger
+    headline = _brief_headline(*built)
+    if headline:
+        with_headline = build_daily_brief(
+            pending,
+            coverage_start=start,
+            coverage_end=end,
+            repository_count=repository_count,
+            data_quality=data_quality if show_quality else None,
+            headline=headline,
+        )
+        if with_headline is not None:
+            built = with_headline
     title, blocks = built
     delivery = _safe_notify(
         job,
         lambda: notify_report(title, blocks, topic=TOPIC_RUN_SUMMARY, config=config),
     )
     if delivery is not None and (delivery.ok or delivery.skip_reason in ("nothing to send", "nothing to report")):
-        ledger = mark_briefed(
-            ledger,
-            [event.identity for event in pending if event.identity],
-            "daily",
-        )
+        briefed = [event.identity for event in pending if event.identity]
+        if show_quality and quality_id:
+            briefed.append(quality_id)
+        ledger = mark_briefed(ledger, briefed, "daily")
     return delivery, ledger
 
 
@@ -484,27 +565,43 @@ def _maybe_send_weekly_brief(
             )
         data_quality = summarize_data_quality(quality_entries)
 
+    ledger, show_quality, pending, quality_id = _gate_data_quality(
+        ledger, data_quality, pending, "weekly", end
+    )
+
     built = build_weekly_brief(
         pending,
         coverage_start=start,
         coverage_end=end,
         repository_count=repository_count,
         developer_events=developer_events,
-        data_quality=data_quality,
+        data_quality=data_quality if show_quality else None,
     )
     if built is None:
         return None, ledger
+    headline = _brief_headline(*built)
+    if headline:
+        with_headline = build_weekly_brief(
+            pending,
+            coverage_start=start,
+            coverage_end=end,
+            repository_count=repository_count,
+            developer_events=developer_events,
+            data_quality=data_quality if show_quality else None,
+            headline=headline,
+        )
+        if with_headline is not None:
+            built = with_headline
     title, blocks = built
     delivery = _safe_notify(
         job,
         lambda: notify_report(title, blocks, topic=TOPIC_RUN_SUMMARY, config=config),
     )
     if delivery is not None and (delivery.ok or delivery.skip_reason in ("nothing to send", "nothing to report")):
-        ledger = mark_briefed(
-            ledger,
-            [event.identity for event in pending if event.identity],
-            "weekly",
-        )
+        briefed = [event.identity for event in pending if event.identity]
+        if show_quality and quality_id:
+            briefed.append(quality_id)
+        ledger = mark_briefed(ledger, briefed, "weekly")
     return delivery, ledger
 
 

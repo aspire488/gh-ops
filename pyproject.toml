@@ -21,6 +21,11 @@ dev = [
     "mypy>=1.5.0",
     "ruff>=0.1.0",
 ]
+# Heavy local System-1 model (~2.2 GB checkpoint, CPU inference). Runtime
+# degrades gracefully when absent; never install in GitHub Actions.
+laya = [
+    "laya>=0.3.20",
+]
 
 [tool.ruff]
 target-version = "py310"

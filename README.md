@@ -1,6 +1,6 @@
 # gh-ops
 
-A reusable, deterministic GitHub operations and intelligence platform.
+A reusable, deterministic GitHub operations and intelligence platform — now frozen for maintenance.
 
 > "A personal GitHub operations layer running on GitHub Actions."
 
@@ -26,6 +26,14 @@ A reusable, deterministic GitHub operations and intelligence platform.
 **Total: 1495/1495 tests passing.**
 
 Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, Telegram contract hardening, final response-UX hardening, and the deterministic intelligence layer are post-Phase-8 batches.
+
+## Status: FROZEN 🔒
+
+**Architecture:** Complete · **Intelligence:** Complete · **Telegram:** Hardened · **OSS Radar:** Complete
+
+The deterministic core, intelligence layer, reporting pipeline, Telegram contracts, OSS Radar, optional Laya/LLM interpretation, GitHub Actions boundaries, and documentation are complete. The repository is now in **maintenance mode**: bug fixes and evidence-driven hardening are welcome; no further feature expansion is planned for this frozen baseline.
+
+**Final verification:** 1495/1495 tests passing · compileall clean · touched-path Ruff clean · Telegram contracts green · secret audit clean · `master == origin/master`.
 
 ## Architecture
 

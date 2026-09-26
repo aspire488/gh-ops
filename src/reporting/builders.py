@@ -245,6 +245,7 @@ def build_daily_brief(
     repository_count: int = 0,
     data_quality: dict[str, Any] | None = None,
     headline: str | None = None,
+    extra_sections: Sequence[str] | None = None,
 ) -> tuple[str, list[str]] | None:
     """Build the daily brief, or None when there is nothing meaningful.
 
@@ -254,7 +255,9 @@ def build_daily_brief(
     Data-quality issues surface only when collectors failed.
     ``headline`` is an optional validated interpretation line (advisory
     display only); when absent the brief is byte-identical to the
-    deterministic-only rendering.
+    deterministic-only rendering. ``extra_sections`` are additional blocks
+    (repository signals, trends, focus) appended before the quality line;
+    when absent/empty the brief is byte-identical to the original.
     """
     ordered = prioritize(dedupe(events))
     quality_line = data_quality_block(data_quality)
@@ -278,6 +281,8 @@ def build_daily_brief(
         blocks.append(header)
         blocks.extend(event_block(event) for event in items)
 
+    if extra_sections:
+        blocks.extend(line for line in extra_sections if line)
     if quality_line:
         blocks.append(quality_line)
     blocks.append(_overall_line(ordered))
@@ -294,13 +299,16 @@ def build_weekly_brief(
     developer_events: int = 0,
     data_quality: dict[str, Any] | None = None,
     headline: str | None = None,
+    extra_sections: Sequence[str] | None = None,
 ) -> tuple[str, list[str]] | None:
     """Build the weekly brief, or None when empty.
 
     Only events not already briefed for this window should be passed by the
     caller. Empty sections are omitted; data-quality issues surface only when
     collectors failed. ``headline`` is an optional validated interpretation
-    line (advisory display only).
+    line (advisory display only). ``extra_sections`` are additional blocks
+    appended before the quality line; absent/empty keeps the brief
+    byte-identical to the original.
     """
     ordered = prioritize(dedupe(events))
     end = coverage_end or datetime.now(timezone.utc)
@@ -326,6 +334,8 @@ def build_weekly_brief(
         blocks.append(header)
         blocks.extend(event_block(event) for event in items)
 
+    if extra_sections:
+        blocks.extend(line for line in extra_sections if line)
     if quality_line:
         blocks.append(quality_line)
     blocks.append(_overall_line(ordered))

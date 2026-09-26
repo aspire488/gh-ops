@@ -2112,7 +2112,7 @@ built brief (deterministic, unchanged)
 | `src/intelligence/laya_adapter.py` | System-1: local Laya, lazy single checkpoint (~2.2 GB RSS, cached, loads only at brief time), allowed-label validation, fail-soft. `LAYA_ENABLED` default true (kill-switch). |
 | `src/intelligence/llm.py` | System-2: OpenAI-compatible cloud provider chain (`GH_OPS_LLM_PROVIDERS`, default groq → gemini), credentials from env only, strict output validation, provider failover. Third audited HTTP exit module (POST-only, chat-completions). |
 | `src/intelligence/interpret.py` | Orchestration: digest → Laya focus gate → LLM → validated headline. Never raises. |
-| `src/jobs/jobs.py::_brief_headline` | Fail-soft composition seam (jobs → intelligence is an allowed direction); builders accept `headline: str \| None`. |
+| `src/jobs/jobs.py::_context_headline` | Fail-soft composition seam (jobs → intelligence is an allowed direction); builders accept `headline: str \| None`. |
 
 ### Failure Semantics
 

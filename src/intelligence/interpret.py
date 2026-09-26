@@ -19,7 +19,8 @@ lifecycle, deduplication, priority, persistence, delivery, or security.
 """
 from __future__ import annotations
 
-from src.intelligence import laya_adapter, llm
+from src.intelligence import attention, grounding, laya_adapter, llm
+from src.intelligence.context import IntelligenceContext
 
 #: Allowed System-1 labels (validated against this set, nothing else).
 FOCUS_LABELS: tuple[str, ...] = ("none", "operations", "security", "oss")
@@ -74,3 +75,72 @@ def interpret_brief(
         focus = label
 
     return llm.summarize(_focus_prompt(focus, text), config=config, session=session)
+
+
+#: Focus → prompt framing for context-based interpretation.
+_CONTEXT_FRAMING: dict[str, str] = {
+    "attention": "Focus on what needs action.",
+    "security": "Focus on the security posture.",
+    "operations": "Focus on repository health.",
+    "developer": "Focus on developer activity.",
+    "oss": "Focus on opportunities and scan outcomes.",
+    "release": "Focus on releases and shipping activity.",
+    "recovery": "Focus on what just recovered.",
+    "trend": "Focus on the recurring pattern.",
+    "mixed": "Give an even-handed overview.",
+}
+
+
+def _context_prompt(focus: str, purpose: str, digest: str) -> str:
+    framing = _CONTEXT_FRAMING.get(focus, "Give an even-handed overview.")
+    return (
+        f"{framing} For the operator's {purpose} brief. One plain sentence, "
+        f"max 60 words. Mention only repositories, links, and item numbers "
+        f"that appear in the context below; never invent them. No evidence "
+        f"IDs, no model scores, no JSON.\n\n{digest}"
+    )
+
+
+def interpret_context(
+    context: IntelligenceContext,
+    *,
+    config: llm.LlmConfig | None = None,
+    session=None,
+    laya_loader=None,
+) -> str | None:
+    """Evidence-grounded headline for an intelligence context, or None.
+
+    Never raises. Flow: skip non-meaningful/empty contexts → Laya System-1
+    triage with the extended label set → reconcile with the deterministic
+    focus (deterministic security/attention always wins) → cloud LLM System-2
+    sentence → grounding validation against the context's evidence. Any
+    failure at any stage returns None and the caller renders the
+    deterministic brief unchanged.
+    """
+    if not context.meaningful or not context.pack.items:
+        return None
+    digest = context.digest()
+    if not digest:
+        return None
+
+    focus = context.focus
+    decision = attention.triage(digest, loader=laya_loader)
+    if decision is not None:
+        focus = attention.reconcile(context.focus, decision[0])
+    if focus == "quiet":
+        return None
+
+    raw = llm.summarize(
+        _context_prompt(focus, context.purpose, digest),
+        config=config,
+        session=session,
+    )
+    if raw is None:
+        return None
+    return grounding.ground_claim(
+        raw,
+        urls=context.urls,
+        slugs=context.slugs,
+        evidence_ids=context.pack.ids,
+        item_numbers=context.pack.item_numbers,
+    )

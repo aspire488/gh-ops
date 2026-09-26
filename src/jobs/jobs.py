@@ -53,6 +53,7 @@ from src.jobs.pipeline import (
 from src.monitors import evaluate_events, run_monitors, summarize_results
 from src.notifications.telegram import (
     TOPIC_ALERTS,
+    TOPIC_OSS_OPPORTUNITIES,
     TOPIC_RUN_SUMMARY,
     TOPIC_SECURITY,
     NotificationResult,
@@ -280,15 +281,23 @@ def _deliver_monitoring_alerts(
     Persistent-condition suppression: results whose report events are already
     NOTIFIED/OPEN for the same identity are filtered out before Telegram is
     called, so an ongoing CI failure or collection error is announced once.
+    Report allocation is the gate: only events allocated to the immediate
+    mode reach this path (monitoring subsystems always are).
     """
+    from src.intelligence.attention import ReportMode, allocation_for
     from src.reporting.ledger import event_should_notify
 
-    notifiable_events = filter_notifiable(ledger, report_events)
+    notifiable_events = [
+        event
+        for event in filter_notifiable(ledger, report_events)
+        if ReportMode.IMMEDIATE in allocation_for(event)
+    ]
     notifiable_results = [
         result
         for result in results
         if (event := report_event_from_monitor(result)) is not None
         and event_should_notify(ledger, event)
+        and ReportMode.IMMEDIATE in allocation_for(event)
     ]
 
     delivery = None
@@ -431,18 +440,44 @@ def _gate_data_quality(
     return ledger, show_quality, pending, quality_id
 
 
-def _brief_headline(title: str, blocks: list[str]) -> str | None:
-    """Laya System-1 -> cloud LLM System-2 headline for a built brief.
+def _context_headline(
+    events: list[ReportEvent],
+    ledger: dict[str, dict],
+    purpose: str,
+    now: datetime,
+) -> str | None:
+    """Laya System-1 -> cloud LLM System-2 headline for an intelligence context.
 
     Display-only and fail-soft: any problem returns None and the brief
     renders exactly as the deterministic pipeline produced it.
     """
     try:
-        from src.intelligence.interpret import interpret_brief
+        from src.intelligence.context import build_context
+        from src.intelligence.interpret import interpret_context
 
-        return interpret_brief("\n".join([title, *blocks]))
+        context = build_context(events, ledger=ledger, purpose=purpose, now=now)
+        return interpret_context(context)
     except Exception:
         return None
+
+
+def _brief_extra_sections(
+    pending: list[ReportEvent],
+    ledger: dict[str, dict],
+    now: datetime,
+) -> list[str]:
+    """Repository signals, trend lines, and focus blocks for a brief."""
+    from src.intelligence.temporal import build_trends
+    from src.reporting.narratives import (
+        focus_blocks,
+        repository_signal_blocks,
+        trend_blocks,
+    )
+
+    signals = repository_signal_blocks(pending)
+    trend_lines = [trend.line for trend in build_trends(ledger, now=now)]
+    focus = focus_blocks(pending)
+    return [*signals, *trend_blocks(trend_lines), *focus]
 
 
 def _maybe_send_daily_brief(
@@ -488,28 +523,21 @@ def _maybe_send_daily_brief(
     ledger, show_quality, pending, quality_id = _gate_data_quality(
         ledger, data_quality, pending, "daily", end
     )
+    if not pending and not show_quality:
+        return None, ledger
 
+    headline = _context_headline(pending, ledger, "daily", end)
     built = build_daily_brief(
         pending,
         coverage_start=start,
         coverage_end=end,
         repository_count=repository_count,
         data_quality=data_quality if show_quality else None,
+        headline=headline,
+        extra_sections=_brief_extra_sections(pending, ledger, end),
     )
     if built is None:
         return None, ledger
-    headline = _brief_headline(*built)
-    if headline:
-        with_headline = build_daily_brief(
-            pending,
-            coverage_start=start,
-            coverage_end=end,
-            repository_count=repository_count,
-            data_quality=data_quality if show_quality else None,
-            headline=headline,
-        )
-        if with_headline is not None:
-            built = with_headline
     title, blocks = built
     delivery = _safe_notify(
         job,
@@ -568,7 +596,10 @@ def _maybe_send_weekly_brief(
     ledger, show_quality, pending, quality_id = _gate_data_quality(
         ledger, data_quality, pending, "weekly", end
     )
+    if not pending and not show_quality and developer_events <= 0:
+        return None, ledger
 
+    headline = _context_headline(pending, ledger, "weekly", end)
     built = build_weekly_brief(
         pending,
         coverage_start=start,
@@ -576,22 +607,11 @@ def _maybe_send_weekly_brief(
         repository_count=repository_count,
         developer_events=developer_events,
         data_quality=data_quality if show_quality else None,
+        headline=headline,
+        extra_sections=_brief_extra_sections(pending, ledger, end),
     )
     if built is None:
         return None, ledger
-    headline = _brief_headline(*built)
-    if headline:
-        with_headline = build_weekly_brief(
-            pending,
-            coverage_start=start,
-            coverage_end=end,
-            repository_count=repository_count,
-            developer_events=developer_events,
-            data_quality=data_quality if show_quality else None,
-            headline=headline,
-        )
-        if with_headline is not None:
-            built = with_headline
     title, blocks = built
     delivery = _safe_notify(
         job,
@@ -747,20 +767,53 @@ def _oss_identity(opportunity: Any) -> str:
     return f"{repo}#{number}"
 
 
-def _notified_oss_identities(state: CurrentState) -> set[str]:
-    """Identities already successfully delivered in a previous run."""
-    return set(state.resources.get("oss_opportunities", {}))
+def _oss_record(opportunity: Any) -> dict[str, Any]:
+    """Change-detection baseline for a delivered opportunity."""
+    updated_at = getattr(opportunity, "updated_at", None)
+    return {
+        "notified": True,
+        "updated_at": updated_at.isoformat() if updated_at else "",
+        "comments": int(getattr(opportunity, "comments", 0) or 0),
+        "state": str(getattr(opportunity, "state", "") or ""),
+        "repo_stars": int(getattr(opportunity, "repo_stars", 0) or 0),
+    }
 
 
-def _state_with_notified_oss(state: CurrentState, identities: set[str]) -> CurrentState:
-    """Return state with ``oss_opportunities`` updated.
+def _oss_known_records(state: CurrentState) -> dict[str, dict]:
+    """Identity → baseline record for opportunities seen in a previous run."""
+    raw = state.resources.get("oss_opportunities", {}) or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
+
+
+def _oss_changed(record: dict, opportunity: Any) -> bool:
+    """True when the stored baseline differs from the current opportunity.
+
+    Legacy records without a baseline never count as changed, so the
+    upgrade itself re-announces nothing.
+    """
+    if "comments" not in record:
+        return False
+    updated_at = getattr(opportunity, "updated_at", None)
+    current_updated = updated_at.isoformat() if updated_at else ""
+    return (
+        str(record.get("updated_at") or "") != current_updated
+        or int(record.get("comments") or 0) != int(getattr(opportunity, "comments", 0) or 0)
+        or str(record.get("state") or "") != str(getattr(opportunity, "state", "") or "")
+        or int(record.get("repo_stars") or 0) != int(getattr(opportunity, "repo_stars", 0) or 0)
+    )
+
+
+def _state_with_oss_records(state: CurrentState, records: dict[str, dict]) -> CurrentState:
+    """Return state with ``oss_opportunities`` baseline records.
 
     Preserves every other resource type so a concurrent daily snapshot is not
     discarded (same partial-update discipline as Phase 3).
     """
     resources = dict(state.resources)
     resources["oss_opportunities"] = {
-        identity: {"notified": True} for identity in sorted(identities)
+        identity: dict(record) for identity, record in sorted(records.items())
     }
     return CurrentState(
         resources=resources,
@@ -835,12 +888,21 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
     except Exception as exc:
         return _fatal(JOB_OSS_HUNT, ErrorCode.SEARCH_FAILED, "OSS hunter failed", exc)
 
-    notified = _notified_oss_identities(previous_state)
-    new_opportunities = [
-        opp
-        for opp in hunter_result.opportunities
-        if _oss_identity(opp) not in notified
-    ]
+    records = _oss_known_records(previous_state)
+    new_opportunities: list[Any] = []
+    changed_opportunities: list[Any] = []
+    for opportunity in hunter_result.opportunities:
+        identity = _oss_identity(opportunity)
+        record = records.get(identity)
+        if record is None or not record.get("notified"):
+            new_opportunities.append(opportunity)
+        elif "comments" not in record:
+            # Legacy record without a baseline: adopt the current values
+            # silently so future changes become detectable (no upgrade
+            # re-announce noise).
+            records[identity] = _oss_record(opportunity)
+        elif _oss_changed(record, opportunity):
+            changed_opportunities.append(opportunity)
 
     stats = OssRunSummary(
         queries_run=hunter_result.queries_run,
@@ -861,7 +923,8 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
         ),
     )
     if delivery is not None and delivery.ok:
-        notified.update(_oss_identity(opp) for opp in new_opportunities)
+        for opportunity in new_opportunities:
+            records[_oss_identity(opportunity)] = _oss_record(opportunity)
     elif delivery is None:
         logger.warning("%s: opportunity delivery raised; not marking identities", JOB_OSS_HUNT)
     elif not delivery.ok:
@@ -871,8 +934,39 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
             delivery.failed_chats,
         )
 
+    # Previously seen opportunities that changed: one radar report under a
+    # distinct title, leaving the pinned opportunities contract untouched.
+    if changed_opportunities:
+        from src.reporting.narratives import oss_update_blocks
+
+        blocks = oss_update_blocks(changed_opportunities)
+        if blocks:
+            radar_delivery = _safe_notify(
+                JOB_OSS_HUNT,
+                lambda: notify_report(
+                    "🧭 GH-OPS · OSS RADAR",
+                    blocks,
+                    topic=TOPIC_OSS_OPPORTUNITIES,
+                    config=config,
+                ),
+            )
+            if radar_delivery is not None and radar_delivery.ok:
+                for opportunity in changed_opportunities:
+                    records[_oss_identity(opportunity)] = _oss_record(opportunity)
+            elif radar_delivery is None:
+                logger.warning(
+                    "%s: radar delivery raised; not marking changed opportunities",
+                    JOB_OSS_HUNT,
+                )
+            elif not radar_delivery.ok:
+                logger.warning(
+                    "%s: radar delivery failed; not marking changed opportunities (%s)",
+                    JOB_OSS_HUNT,
+                    radar_delivery.failed_chats,
+                )
+
     try:
-        persist_state(_state_with_notified_oss(previous_state, notified))
+        persist_state(_state_with_oss_records(previous_state, records))
     except Exception as exc:
         return _fatal(JOB_OSS_HUNT, ErrorCode.STATE_SAVE_FAILED, "Could not persist state", exc)
 
@@ -882,6 +976,7 @@ def job_oss_hunt(**kwargs: Any) -> JobResult:
         data={
             "opportunities": len(hunter_result.opportunities),
             "new_opportunities": len(new_opportunities),
+            "changed_opportunities": len(changed_opportunities),
             "queries_run": hunter_result.queries_run,
             "queries_failed": hunter_result.queries_failed,
             **_notification_data(delivery),

@@ -403,11 +403,10 @@ class TestOssHuntJob:
         assert result.success is True
         assert "persist_state" in pipeline["calls"]
         notified = pipeline["persisted"].resources["oss_opportunities"]
-        assert notified == {
-            "octo/example#42": {"notified": True},
-            "other/repo#7": {"notified": True},
-        }
+        assert set(notified) == {"octo/example#42", "other/repo#7"}
+        assert all(record.get("notified") is True for record in notified.values())
         assert result.data["new_opportunities"] == 2
+        assert result.data["changed_opportunities"] == 0
 
     def test_second_run_filters_already_notified(self, pipeline, oss_env):
         jobs_module.job_oss_hunt()

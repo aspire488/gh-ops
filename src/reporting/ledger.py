@@ -119,6 +119,9 @@ def merge_events(
             entry["briefed_weekly"] = False
             entry["status"] = STATUS_NEW
             entry["condition"] = condition_key(key)
+            entry["observations"] = 1
+            entry["first_observed"] = str(entry.get("timestamp") or "")
+            entry["last_observed"] = str(entry.get("timestamp") or "")
             merged[key] = entry
         else:
             # Keep original timestamp, delivery flags, and announce metadata.
@@ -148,6 +151,20 @@ def merge_events(
             entry["condition"] = str(
                 existing.get("condition") or condition_key(key)
             )
+            # Temporal bookkeeping: observation counts and reopen tracking
+            # (legacy entries without counters are treated as one prior
+            # observation, so pre-upgrade ledgers keep working).
+            entry["observations"] = int(existing.get("observations") or 1) + 1
+            entry["first_observed"] = str(
+                existing.get("first_observed") or existing.get("timestamp") or ""
+            )
+            entry["last_observed"] = str(
+                event.timestamp or existing.get("last_observed") or ""
+            )
+            if prev_status in (STATUS_RESOLVED, STATUS_RETIRED) and (
+                event.severity is not Severity.RESOLVED
+            ) or event.severity is not Severity.RESOLVED and existing.get("reopened"):
+                entry["reopened"] = True
             merged[key] = entry
     return merged
 

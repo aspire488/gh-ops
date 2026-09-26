@@ -21,10 +21,11 @@ A reusable, deterministic GitHub operations and intelligence platform.
 | Reporting + product-hardening batch | ✅ Complete | 1260/1260 tests |
 | Final intelligence hardening batch | ✅ Complete | 1324/1324 tests |
 | Laya + LLM interpretation batch | ✅ Complete | 1367/1367 tests |
+| Deterministic intelligence layer + OSS Radar | ✅ Complete | 1495/1495 tests |
 
-**Total: 1367/1367 tests passing.**
+**Total: 1495/1495 tests passing.**
 
-Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, Telegram contract hardening, and final response-UX hardening are post-Phase-8 batches.
+Figures are cumulative as of the end of each phase. Security Intelligence, unified reporting, repository/event hardening, Telegram contract hardening, final response-UX hardening, and the deterministic intelligence layer are post-Phase-8 batches.
 
 ## Architecture
 
@@ -67,7 +68,7 @@ python -m src.jobs not-a-job           # prints available jobs, exits 1
 Jobs read `GITHUB_TOKEN` for collection and `TELEGRAM_BOT_TOKEN` for delivery.
 A job never exits 0 without having executed one.
 
-Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and weekly runs may send briefs built from the shared reporting ledger (only when meaningful events exist; a quiet run sends nothing). Briefs render in a fixed attention-first order: 🚨 Attention (action-required only) → 🛡️ Security → CI → 🧭 OSS → 🧑‍💻 Developer → 🚀 Releases & Repositories → ⚠️ Data quality, closed by an `Overall:` line. Data-quality warnings are ledger-gated: each distinct state is briefed once, then silent until it changes. Successful CI runs (and gh-ops's own workflow runs) are silenced at conversion; failures of gh-ops's own enumerated workflows render as `GH-OPS · SYSTEM` alerts. Completion summaries (run/oss/security) are no longer sent by jobs; their formatters remain exported for API compatibility. Repository counts come only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery). Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery; recovery events clear the mark and may send a RESOLVED report).
+Monitoring alerts remain event-driven. When `telegram.run_summary` is enabled, successful daily and weekly runs may send briefs built from the shared reporting ledger (only when meaningful events exist; a quiet run sends nothing). Briefs render in a fixed attention-first order: 🚨 Attention (action-required only) → 🛡️ Security → CI → 🧭 OSS → 🧑‍💻 Developer → 🚀 Releases & Repositories → ⚠️ Data quality, closed by an `Overall:` line, followed by deterministic intelligence blocks (🎯 Focus, 📦 Repository Signals, 📈 Trends) built from the bounded evidence pack. Data-quality warnings are ledger-gated: each distinct state is briefed once, then silent until it changes. Successful CI runs (and gh-ops's own workflow runs) are silenced at conversion; failures of gh-ops's own enumerated workflows render as `GH-OPS · SYSTEM` alerts. Completion summaries (run/oss/security) are no longer sent by jobs; their formatters remain exported for API compatibility. Repository counts come only from config/repositories.yml; accessible account repositories are never added automatically. OSS opportunities are deduplicated across runs via the `oss_opportunities` resource key in Phase 3 state (at-least-once: identities are marked only after successful delivery); a previously delivered opportunity whose comments, state, stars, or updated timestamp change is re-announced exactly once under the distinct `🧭 GH-OPS · OSS RADAR` title, while unchanged opportunities stay silent. Security findings are likewise deduplicated across runs via the `security_notified` resource key (findings live under `security`; only actionable severities are batch-delivered, marked only after successful delivery; recovery events clear the mark and may send a RESOLVED report).
 
 ## Local Secrets (`.env`)
 
@@ -115,10 +116,17 @@ unavailable.
 
 ```
 built brief (deterministic)
-  → Laya System-1 decides focus: none | operations | security | oss
+  → intelligence context: evidence pack → temporal state → correlations
+      → deterministic focus (attention | security | operations | … | quiet)
+      → non-meaningful/quiet context stops here: no model is consulted
+  → Laya System-1 triage proposes a label from a fixed allow-list
       (local, lazy, one ~2.2 GB checkpoint, cached, runs only at brief time)
-  → "none" skips the LLM; otherwise the cloud LLM writes one ≤60-word sentence
-      (provider chain groq → gemini, OpenAI-compatible, env credentials)
+  → reconcile: deterministic attention/security always win; Laya "quiet"
+      may only silence a non-urgent focus
+  → "quiet" skips the LLM; otherwise the cloud LLM writes one ≤60-word
+      sentence (provider chain groq → gemini, OpenAI-compatible, env credentials)
+  → grounding: every URL, repository, and item number in the sentence must
+      exist in the evidence pack, else the claim is dropped
   → strict validation (length, printable text, no JSON, no internal strings)
   → 🧠 line inserted after Coverage, display-only
 ```
@@ -127,6 +135,8 @@ Rules:
 
 - Fully functional with neither layer: no keys, dead provider, timeout, or a
   missing Laya install all collapse to `None` and the brief renders unchanged.
+- A context that is not meaningful (quiet) never reaches either layer, so a
+  calm day costs zero model calls.
 - Laya's numeric score is an **uncalibrated model score**, never a probability.
 - Laya is advisory: its label is validated against a fixed allow-list before
   use; it never mutates state, executes anything, or alters event output.
@@ -670,10 +680,19 @@ or contacts GitHub.
 | `security/test_security_hardening.py` | 40 | Phase 9 static verification: GET-only, no eval/shell, redaction |
 | `intelligence/llm.py` | 18 | Output validation, env config, provider failover, key safety |
 | `intelligence/laya_adapter.py` + `interpret.py` | 21 | System-1 gate, allowed-label validation, Laya → LLM orchestration |
+| `intelligence/evidence.py` | 15 | Evidence pack: dedup, ordering, 40-item bound, derived slug/URL/ID sets |
+| `intelligence/temporal.py` | 18 | State precedence, stale detection, recurring/quieted trends |
+| `intelligence/correlate.py` | 10 | One-per-repository priority chain, non-causal statements |
+| `intelligence/attention.py` | 35 | Report-mode allocation, focus, meaningfulness, reconcile, Laya triage |
+| `intelligence/grounding.py` | 14 | Claim validation: bounds, URL/slug/evidence-ID/item-number allow-lists |
+| `intelligence/context.py` | 9 | Bounded digest, focus derivation, determinism |
+| `intelligence/interpret.py` (context headline) | 10 | Quiet skip, reconcile, grounding of the LLM sentence |
+| `reporting/narratives.py` | 12 | Focus, repository signals, trends, OSS radar blocks |
+| `jobs/*` (intelligence wiring) | 5 | Brief focus/fail-soft/quiet day, OSS new → changed → silent |
 | `.github/workflows/*` | 220 | Static validation: YAML, permissions, SHA pins, schedules, secrets, state |
-| **Total** | **1367** | |
+| **Total** | **1495** | |
 
-The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, repository/event lifecycle hardening, and the final response-UX batch (attention-first briefs, gh-ops system-workflow classification, data-quality ledger gating).
+The post-Phase-8 hardening suites add Telegram transport-boundary contracts, unified reporting, security-intelligence delivery, cross-run deduplication, repository/event lifecycle hardening, and the final response-UX batch (attention-first briefs, gh-ops system-workflow classification, data-quality ledger gating). The deterministic intelligence batch adds the evidence-pack, temporal, correlation, attention, grounding, and narrative suites plus job-wiring tests.
 
 ## Project Structure
 
@@ -686,7 +705,7 @@ gh-ops/
 │   │   ├── client.py   # Single HTTP exit point (GET-only)
 │   │   ├── models.py   # Frozen dataclasses for API responses
 │   │   └── collectors/ # Thin data-fetching wrappers
-│   ├── intelligence/   # OSS hunter, release/security radars
+│   ├── intelligence/   # OSS hunter, radars, evidence/temporal/attention layer
 │   ├── developer/      # Personal activity, statistics, reports
 │   ├── monitors/       # Repository, CI, release, security, endpoint monitors
 │   │   ├── __init__.py # Monitor registry and evaluator
@@ -696,6 +715,7 @@ gh-ops/
 │   │   ├── security.py # Security alert change evaluation
 │   │   └── endpoint.py # HTTP endpoint health checks (SSRF-protected)
 │   ├── notifications/  # Outbound Telegram delivery (Phase 7)
+│   ├── reporting/      # Ledger, priority, briefs, narratives
 │   ├── jobs/           # Thin job orchestration for Actions (Phase 8)
 │   │   ├── __main__.py # python -m src.jobs <job_name>
 │   │   ├── pipeline.py # Shared plumbing: config, collection, state, diff
@@ -705,7 +725,7 @@ gh-ops/
 ├── config/             # YAML configuration files (monitoring.yml, oss_hunter.yml, telegram.yml)
 ├── .env.example        # Tracked template; real .env is gitignored
 ├── data/               # Runtime state (gitignored, carried by Actions cache)
-├── tests/              # Test suite (1084 tests)
+├── tests/              # Test suite (1495 tests)
 └── scripts/            # Local development scripts
 ```
 

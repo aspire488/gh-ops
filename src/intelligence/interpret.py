@@ -1,18 +1,21 @@
 """Brief interpretation: Laya System-1 triage, cloud LLM System-2 writing.
 
-Pipeline (display-only, never mutates state):
+Two entry points, both display-only and never raising:
 
-    bounded brief digest
-        -> Laya decides focus in {"none", "operations", "security", "oss"}
-        -> "none" skips the LLM entirely; any other focus frames the prompt
-        -> cloud LLM writes one short sentence
-        -> strict validation before it reaches the caller
+- ``interpret_context`` (used by jobs): builds the focus from the
+  deterministic intelligence context, lets Laya propose a label from the
+  extended allow-list, reconciles (deterministic attention/security always
+  win; ``quiet`` only silences non-urgent foci), then grounds the LLM
+  sentence against the context's evidence pack.
+- ``interpret_brief``: the original digest-based path with the fixed
+  ``FOCUS_LABELS`` set, retained for API compatibility.
 
 Failure semantics keep the deterministic brief fully functional:
 
-- Laya unavailable/disabled/failed  -> proceed with a neutral focus.
+- Laya unavailable/disabled/failed  -> proceed with the deterministic focus.
 - LLM unavailable/failed/invalid    -> return None (brief renders unchanged).
-- Both healthy                      -> validated headline.
+- Grounding rejects the claim       -> return None.
+- Both healthy                      -> validated, evidence-grounded headline.
 
 The headline is advisory display only; it never influences event identity,
 lifecycle, deduplication, priority, persistence, delivery, or security.

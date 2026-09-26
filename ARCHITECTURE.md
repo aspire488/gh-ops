@@ -2146,6 +2146,73 @@ live end-to-end run confirmed Laya triage → cloud LLM → validated headline.
 
 ---
 
+## O. Deterministic Intelligence Layer (Evidence → Attention)
+
+### Role
+
+Deterministic intelligence over the reporting ledger. Every daily/weekly brief
+and the interpretation layer (section N, which sits on top of this one) consume
+its output; no model contributes to it. One evidence pack, one temporal view,
+one correlation pass, one attention decision — no parallel ad-hoc formatting
+paths.
+
+### Pipeline
+
+```
+pending brief events + reporting ledger
+  → evidence pack (≤40 items, fixed severity/subsystem ordering, ids E1..E40)
+  → temporal profiles (new / ongoing / persistent / stale / reopened /
+      escalating / recovered) + trends (recurring ≥3 conditions,
+      quieted ≥2 resolved conditions)
+  → correlations (one per repository, fixed priority chain, non-causal text)
+  → attention: deterministic focus, is_meaningful, report-mode allocation
+  → narratives (🎯 Focus, 📦 Repository Signals, 📈 Trends, OSS radar blocks)
+  → brief builders (extra_sections) → Telegram; context digest → section N
+```
+
+### Components
+
+| File | Role |
+|------|------|
+| `src/intelligence/evidence.py` | Bounded pack: ≤40 items, fixed sort key, evidence ids `E1..E40`, derived slug/URL/item-number sets for grounding |
+| `src/intelligence/temporal.py` | Ledger-derived state precedence, stale detection (7 days), recurring/quieted trend profiles |
+| `src/intelligence/correlate.py` | One correlation per repository; fixed priority chain (dev+CI → security+release → security+CI → release+CI → multi-subsystem); non-causal wording |
+| `src/intelligence/attention.py` | Report-mode allocation (gates only suppress), deterministic focus, `is_meaningful`, Laya triage + `reconcile` |
+| `src/intelligence/context.py` | `IntelligenceContext` with a ≤4000-char digest (header + tail budgeted first) |
+| `src/intelligence/grounding.py` | Claim validation against the pack's URLs, slugs, evidence ids, item numbers |
+| `src/reporting/narratives.py` | Plain-text brief/radar blocks consumed by the builders |
+
+### Invariants
+
+- Evidence, temporal state, correlations, focus, and allocation are
+  deterministic and unit-tested; a model cannot introduce items, ids, URLs,
+  repositories, or numbers that are not in the pack.
+- Laya triage is advisory: labels are validated against a fixed allow-list,
+  invalid labels fall back to the deterministic focus, deterministic
+  `security`/`attention` always win, and `quiet` may only silence a
+  non-urgent focus.
+- Report allocation only suppresses delivery modes, never promotes them:
+  monitoring subsystems reach immediate+daily+weekly; content subsystems
+  (developer/OSS) stay in briefs.
+- `is_meaningful` gates both briefs and interpretation: an empty,
+  non-actionable, sub-threshold context is silent (zero model calls).
+
+### Failure Semantics
+
+| Condition | Behaviour |
+|-----------|-----------|
+| `interpret_context` / Laya / LLM raises | `_context_headline` catches → `None`; deterministic brief unchanged |
+| Non-meaningful or quiet context | no model call; deterministic blocks may still render |
+| Grounding rejects the claim | headline dropped; brief unchanged |
+
+### Verification
+
+128 new tests (evidence 15, temporal 18, correlate 10, attention 35,
+grounding 14, context 9, context-headline 10, narratives 12, wiring 5) →
+**1495/1495 passing**; `ruff` clean on all touched paths; `compileall` clean.
+
+---
+
 ## Architectural Invariants
 
 1. **Read-only by default.** No GitHub writes without explicit human approval via `workflow_dispatch`.
@@ -2153,7 +2220,9 @@ live end-to-end run confirmed Laya triage → cloud LLM → validated headline.
 3. **Deterministic.** Same input → same output. No randomness in the event
    pipeline. The optional interpretation layer (Laya/LLM, section N) is
    display-only, fails to `None`, and never influences what the deterministic
-   pipeline produces.
+   pipeline produces. The intelligence layer beneath it (section O) is itself
+   model-free: selection, severity, identity, and allocation are computed
+   deterministically from the ledger.
 4. **Partial failure is normal.** One bad repo does not kill the run.
 5. **State is JSON.** No external databases in runtime. Repository-backed via Actions cache.
 6. **Workflows are thin.** Logic lives in Python, not YAML. A workflow's only

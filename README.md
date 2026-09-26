@@ -711,7 +711,7 @@ The post-Phase-8 hardening suites add Telegram transport-boundary contracts, uni
 The portfolio is actively contributing upstream alongside GH-OPS maintenance. The latest open PRs are:
 
 - **LlamaIndex #23260** — preserves originally retrieved node scores during overlapping Prev/Next expansion, with regression coverage.
-- **Pydantic AI #8823** — avoids an unnecessary RunContext copy when validation context is unset, while preserving non-None and callable contexts.
+- **Pydantic AI #8823** — closed by the upstream issue-assignment guard before merge; Macroscope approved the implementation, but issue #8778 was not assigned.
 
 These are tracked in the profile-level OSS ledger; GH-OPS itself remains **FROZEN / maintenance mode**.
 

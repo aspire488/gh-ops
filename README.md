@@ -711,7 +711,6 @@ The post-Phase-8 hardening suites add Telegram transport-boundary contracts, uni
 The portfolio is actively contributing upstream alongside GH-OPS maintenance. The latest open PRs are:
 
 - **LlamaIndex #23260** — preserves originally retrieved node scores during overlapping Prev/Next expansion, with regression coverage.
-- **AgentField #1073** — approved upstream; adds explicit Go harness factory coverage for Claude Code and OpenCode provider construction. Maintainer review confirms the concrete type assertions and reports focused factory tests plus `go vet` passing locally.
 - **Pydantic AI #8823** — closed by the upstream issue-assignment guard before merge; Macroscope approved the implementation, but issue #8778 was not assigned.
 
 These are tracked in the profile-level OSS ledger; GH-OPS itself remains **FROZEN / maintenance mode**.

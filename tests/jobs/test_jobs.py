@@ -269,6 +269,18 @@ class TestMonitoringJob:
         collected = [c for c in pipeline["calls"] if isinstance(c, tuple)]
         assert collected == [("build_snapshot", ("workflows", "security"))]
 
+    def test_sends_run_summary(self, pipeline, monitors, monkeypatch):
+        delivered = []
+        monkeypatch.setattr(
+            jobs_module,
+            "notify_run_summary",
+            lambda summary, **kw: delivered.append(summary) or _result_ok(topic="run_summary"),
+        )
+        result = jobs_module.job_monitoring()
+        assert result.success is True
+        assert len(delivered) == 1
+        assert delivered[0].run_type == "monitoring"
+
     def test_does_not_consume_daily_brief(self, pipeline, monitors, monkeypatch):
         def unexpected_daily_brief(*args, **kwargs):
             raise AssertionError("monitoring must not run the daily brief scheduler")

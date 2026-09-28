@@ -699,7 +699,10 @@ def job_monitoring(**kwargs: Any) -> JobResult:
     delivery, ledger = _deliver_monitoring_alerts(
         JOB_MONITORING, state, config, results, report_events, ledger
     )
-    brief_delivery, ledger = _maybe_send_daily_brief(JOB_MONITORING, config, state, ledger)
+    # Monitoring is an alerting loop, not the daily digest scheduler.
+    # The daily workflow owns daily briefs; allowing this 2-hour job to call
+    # _maybe_send_daily_brief() consumes/marks ledger events before the
+    # scheduled Daily run, making the Daily Telegram brief disappear.
     _persist_ledger(state, ledger)
 
     data: dict[str, Any] = {
@@ -707,8 +710,6 @@ def job_monitoring(**kwargs: Any) -> JobResult:
         "monitors": summary,
         **_notification_data(delivery),
     }
-    if brief_delivery is not None:
-        data["brief_notification"] = brief_delivery.to_dict()
     return JobResult(job=JOB_MONITORING, success=True, data=data)
 
 

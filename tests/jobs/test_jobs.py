@@ -269,6 +269,16 @@ class TestMonitoringJob:
         collected = [c for c in pipeline["calls"] if isinstance(c, tuple)]
         assert collected == [("build_snapshot", ("workflows", "security"))]
 
+    def test_does_not_consume_daily_brief(self, pipeline, monitors, monkeypatch):
+        def unexpected_daily_brief(*args, **kwargs):
+            raise AssertionError("monitoring must not run the daily brief scheduler")
+
+        monkeypatch.setattr(jobs_module, "_maybe_send_daily_brief", unexpected_daily_brief)
+        result = jobs_module.job_monitoring()
+
+        assert result.success is True
+        assert "brief_notification" not in result.data
+
 
 class TestWeeklyReportJob:
     @pytest.fixture()

@@ -58,10 +58,12 @@ from src.notifications.telegram import (
     TOPIC_SECURITY,
     NotificationResult,
     OssRunSummary,
+    RunSummary,
     notify_developer_report,
     notify_monitor_alerts,
     notify_oss_opportunities,
     notify_report,
+    notify_run_summary,
     notify_security_alerts,
 )
 from src.reporting.convert import (
@@ -523,9 +525,8 @@ def _maybe_send_daily_brief(
     ledger, show_quality, pending, quality_id = _gate_data_quality(
         ledger, data_quality, pending, "daily", end
     )
-    if not pending and not show_quality:
-        return None, ledger
-
+    # The daily brief is a scheduled product. Send a quiet brief too, so
+    # the daily workflow produces a predictable Telegram heartbeat.
     headline = _context_headline(pending, ledger, "daily", end)
     built = build_daily_brief(
         pending,
@@ -664,12 +665,26 @@ def job_daily(**kwargs: Any) -> JobResult:
         JOB_DAILY, config, activity_events, ledger
     )
     brief_delivery, ledger = _maybe_send_daily_brief(JOB_DAILY, config, state, ledger)
+    run_summary_delivery = _safe_notify(
+        JOB_DAILY,
+        lambda: notify_run_summary(
+            RunSummary(
+                run_type="daily",
+                repositories_checked=len(monitored_repository_names(config)),
+                items_collected=len(events),
+                alerts_generated=len(report_events),
+                state_persisted=True,
+            ),
+            config=config,
+        ),
+    )
     _persist_ledger(state, ledger)
 
     data: dict[str, Any] = {
         "state": state_summary(state),
         "monitors": summary,
         **_notification_data(delivery),
+        "run_summary_notification": _notification_data(run_summary_delivery)["notification"],
     }
     if developer_delivery is not None:
         data["developer_notification"] = developer_delivery.to_dict()
@@ -699,6 +714,19 @@ def job_monitoring(**kwargs: Any) -> JobResult:
     delivery, ledger = _deliver_monitoring_alerts(
         JOB_MONITORING, state, config, results, report_events, ledger
     )
+    run_summary_delivery = _safe_notify(
+        JOB_MONITORING,
+        lambda: notify_run_summary(
+            RunSummary(
+                run_type="monitoring",
+                repositories_checked=len(monitored_repository_names(config)),
+                items_collected=len(events),
+                alerts_generated=len(report_events),
+                state_persisted=True,
+            ),
+            config=config,
+        ),
+    )
     # Monitoring is an alerting loop, not the daily digest scheduler.
     # The daily workflow owns daily briefs; allowing this 2-hour job to call
     # _maybe_send_daily_brief() consumes/marks ledger events before the
@@ -709,6 +737,7 @@ def job_monitoring(**kwargs: Any) -> JobResult:
         "state": state_summary(state),
         "monitors": summary,
         **_notification_data(delivery),
+        "run_summary_notification": _notification_data(run_summary_delivery)["notification"],
     }
     return JobResult(job=JOB_MONITORING, success=True, data=data)
 

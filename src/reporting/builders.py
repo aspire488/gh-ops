@@ -261,9 +261,8 @@ def build_daily_brief(
     """
     ordered = prioritize(dedupe(events))
     quality_line = data_quality_block(data_quality)
-    if not ordered and not quality_line:
-        return None
-
+    # A daily brief is scheduled output, so a quiet day still produces
+    # a compact heartbeat rather than disappearing silently.
     end = coverage_end or datetime.now(timezone.utc)
     start = coverage_start or (end - timedelta(hours=24))
 

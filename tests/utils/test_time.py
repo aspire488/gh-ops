@@ -33,6 +33,16 @@ class TestParseGithubTimestamp:
         dt = parse_github_timestamp(ts)
         assert dt.tzinfo is not None
 
+    def test_positive_offset_normalizes_to_utc(self):
+        dt = parse_github_timestamp("2026-09-21T13:30:00+05:30")
+        assert dt == datetime(2026, 9, 21, 8, 0, tzinfo=timezone.utc)
+        assert dt.tzinfo is timezone.utc
+
+    def test_negative_offset_normalizes_to_utc(self):
+        dt = parse_github_timestamp("2026-09-21T03:00:00-05:00")
+        assert dt == datetime(2026, 9, 21, 8, 0, tzinfo=timezone.utc)
+        assert dt.tzinfo is timezone.utc
+
     def test_invalid_format(self):
         with pytest.raises(ValueError):
             parse_github_timestamp("not-a-timestamp")

@@ -261,7 +261,12 @@ def build_daily_brief(
     """
     ordered = prioritize(dedupe(events))
     quality_line = data_quality_block(data_quality)
-    if not ordered and quality_line is None and not headline and not any(extra_sections or ()):
+    if (
+        not ordered
+        and quality_line is None
+        and not headline
+        and not any(extra_sections or ())
+    ):
         return None
     end = coverage_end or datetime.now(timezone.utc)
     start = coverage_start or (end - timedelta(hours=24))

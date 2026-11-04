@@ -21,7 +21,7 @@ class TestParseGithubTimestamp:
         assert dt.year == 2026
         assert dt.month == 9
         assert dt.day == 21
-        assert dt.tzinfo is not None
+        assert dt.tzinfo is timezone.utc
 
     def test_with_milliseconds(self):
         ts = "2026-09-21T08:00:00.123456Z"
@@ -31,7 +31,7 @@ class TestParseGithubTimestamp:
     def test_with_offset(self):
         ts = "2026-09-21T08:00:00+00:00"
         dt = parse_github_timestamp(ts)
-        assert dt.tzinfo is not None
+        assert dt.tzinfo is timezone.utc
 
     def test_positive_offset_normalizes_to_utc(self):
         dt = parse_github_timestamp("2026-09-21T13:30:00+05:30")

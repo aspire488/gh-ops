@@ -1,43 +1,61 @@
-# gh-ops
+<p align="center"><img src="assets/brand/readme-hero.svg" width="100%" alt="gh-ops — Observe the signal. Preserve the evidence."/></p>
 
-A reusable, deterministic GitHub operations and intelligence platform — now frozen for maintenance.
+<p align="center">
+  <img src="https://img.shields.io/badge/STATUS-FROZEN%20%2F%20MAINTENANCE-34342f?style=flat-square" alt="Frozen maintenance status">
+  <img src="https://img.shields.io/badge/TESTS-1495%20%2F%201495-34342f?style=flat-square" alt="1495 tests passing">
+  <img src="https://img.shields.io/badge/RUNTIME-PYTHON%203.10%2B-34342f?style=flat-square" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/LICENSE-MIT-34342f?style=flat-square" alt="MIT license">
+</p>
 
-> "A personal GitHub operations layer running on GitHub Actions."
+# GitHub operations, made observable.
 
-## Status
+**gh-ops is a deterministic GitHub operations and intelligence platform running on GitHub Actions.** It collects repository signals, detects meaningful changes, evaluates monitors, builds evidence-grounded reports, and delivers bounded notifications.
 
-**Implementation status: COMPLETE / FROZEN 🔒**
+Its purpose is not to automate GitHub blindly. It is to make operational signals explainable, auditable, and safe to act on.
 
-All planned implementation phases and the post-Phase-8 hardening/intelligence line are complete. The phase labels below are **historical milestones only**. Phase 8 is the final numbered milestone; the complete frozen system is represented by the post-Phase-8 batches and the **1,495-test** baseline.
+## System at a glance
 
-| Historical milestone | Status | Tests |
-|-------|--------|-------|
-| Phase 0 — Architecture | Complete | — |
-| Phase 1 — Core Runtime | Complete | 112/112 |
-| Phase 2 — GitHub API Client | Complete | 73/73 |
-| Phase 3 — State & Event Engine | Complete | 106/106 |
-| Phase 4 — Repository Monitoring | ✅ Complete | 388/388 tests |
-| Phase 5 — OSS Intelligence | ✅ Complete | 494/494 tests |
-| Phase 6 — Developer Intelligence | ✅ Complete | 569/569 tests |
-| Phase 7 — Telegram Notifications | ✅ Complete | 766/766 tests |
-| Phase 8 — GitHub Actions | ✅ Complete | 1084/1084 tests |
-| Security Intelligence batch | ✅ Complete | 1150/1150 tests |
-| Reporting + product-hardening batch | ✅ Complete | 1260/1260 tests |
-| Final intelligence hardening batch | ✅ Complete | 1324/1324 tests |
-| Laya + LLM interpretation batch | ✅ Complete | 1367/1367 tests |
-| Deterministic intelligence layer + OSS Radar | ✅ Complete | 1495/1495 tests |
+| Layer | Responsibility |
+|---|---|
+| Collection | Read-only GitHub API client, collectors, pagination, ETags |
+| State & events | Deterministic snapshots, lifecycle tracking, change detection |
+| Monitoring | Repository, CI, release, endpoint, and security signals |
+| Intelligence | OSS opportunity discovery, evidence, temporal context, prioritisation |
+| Reporting | Developer activity, daily/weekly briefs, data-quality context |
+| Delivery | Outbound Telegram notifications with bounded retries |
+| Orchestration | Thin scheduled GitHub Actions workflows |
 
-**Total: 1495/1495 tests passing.**
+## Frozen engineering baseline
 
-Figures are cumulative historical checkpoints. The complete system is the final 1,495-test frozen baseline; the security, reporting, repository/event, Telegram, Laya/LLM, and deterministic-intelligence work all landed after the original Phase 8 milestone.
+<blockquote>
+  <strong>1,495 / 1,495 tests passing.</strong><br>
+  Implementation complete. The repository is in maintenance mode: evidence-driven fixes and hardening are welcome; feature expansion is not planned for this frozen baseline.
+</blockquote>
 
-## Status: FROZEN 🔒
+- Deterministic core and reporting pipeline
+- Read-only GitHub collection boundaries
+- Explicit workflow permissions and serialized state writes
+- Secret-safe logging and outbound notification contracts
+- Optional Laya/LLM interpretation behind validation and deterministic fallbacks
+- Static workflow/security validation and reproducible tests
 
-**Implementation:** Complete · **Architecture:** Complete · **Intelligence:** Complete · **Telegram:** Hardened · **OSS Radar:** Complete
+## Operating principles
 
-The deterministic core, intelligence layer, reporting pipeline, Telegram contracts, OSS Radar, optional Laya/LLM interpretation, GitHub Actions boundaries, and documentation are complete. The repository is now in **maintenance mode**: bug fixes and evidence-driven hardening are welcome; no further feature expansion is planned for this frozen baseline.
+1. **Read before acting** — collection is read-only; the system does not write to upstream repositories.
+2. **Evidence before conclusions** — incomplete collection is reported as incomplete, never silently converted to zero.
+3. **Determinism by default** — state transitions, aggregation, prioritisation, and output ordering are reproducible.
+4. **Bounded delivery** — notifications have finite timeouts, bounded retries, escaping, and failure isolation.
+5. **Thin orchestration** — GitHub Actions schedules Python jobs; business logic stays in the application.
 
-**Final verification:** 1495/1495 tests passing · compileall clean · touched-path Ruff clean · Telegram contracts green · secret audit clean · `master == origin/master`.
+## Documentation map
+
+- [Architecture](ARCHITECTURE.md) — system design and dependency boundaries
+- [Configuration](config/) — monitor, OSS hunter, and Telegram settings
+- [Workflows](.github/workflows/) — scheduled and manually dispatched jobs
+- [Tests](tests/) — deterministic and mocked integration coverage
+- [Security](SECURITY.md) — security policy and reporting
+
+---
 
 ## Architecture
 

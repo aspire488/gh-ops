@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/STATUS-ACTIVE%20%C2%B7%20KESTREL-34342f?style=flat-square" alt="Active development: Kestrel">
-  <img src="https://img.shields.io/badge/TESTS-__N__%20%2F%20__N__-34342f?style=flat-square" alt="__N__ tests passing">
+  <img src="https://img.shields.io/badge/TESTS-1674%20%2F%201674-34342f?style=flat-square" alt="1674 tests passing">
   <img src="https://img.shields.io/badge/RUNTIME-PYTHON%203.10%2B-34342f?style=flat-square" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/LICENSE-MIT-34342f?style=flat-square" alt="MIT license">
 </p>
@@ -30,7 +30,7 @@ Its purpose is not to automate GitHub blindly. It is to make operational signals
 ## Engineering baseline
 
 <blockquote>
-  <strong>__N__ / __N__ tests passing</strong> (offline: a conftest guard blocks real network).<br>
+  <strong>1674 / 1674 tests passing</strong> (offline: a conftest guard blocks real network).<br>
   The deterministic batch engine is stable; active development continues in Kestrel, the proactive agent layer.
 </blockquote>
 
@@ -226,7 +226,7 @@ Telegram ──getUpdates──▶ src/bot/app.py ──▶ src/agent/agent.py (
 ### Testing
 
 ```bash
-pytest                                  # 1542 tests, ~10s, network blocked by a conftest guard
+pytest                                  # 1674 tests, ~10s, network blocked by a conftest guard
 python scripts/eval_agent.py            # LIVE response-quality eval (read-only, real LLM + GitHub)
 python scripts/eval_agent.py "question" # ad-hoc live question
 ```

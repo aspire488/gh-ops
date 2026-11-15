@@ -29,7 +29,9 @@ def make_bot(chat=None, routes=None, writer=None, notifications=None, updates=No
     store = ConversationStore()
     tools = ToolRegistry()
     agent = Agent(tools, store, login="me", chat_fn=chat or scripted_chat(answer("ok")))
-    cfg = BotConfig(allowed_users={ME}, allowed_chats={ME}, policy=AttentionPolicy(quiet_start="", quiet_end=""))
+    # daily_brief_at="": otherwise any run after 09:00 local sends a real brief first and tests flake by time of day
+    cfg = BotConfig(allowed_users={ME}, allowed_chats={ME}, policy=AttentionPolicy(quiet_start="", quiet_end=""),
+                    daily_brief_at="")
     watcher = AttentionWatcher(client, "me", cfg.policy)
     bot = KestrelBot(transport=tg, poll_transport=tg, client=client, cfg=cfg, agent=agent, tools=tools, store=store,
                      actions=ActionQueue(writer=writer), watcher=watcher, login="me", clock=lambda: 0)
@@ -195,6 +197,39 @@ class TestProactive:
         bot, tg = make_bot(routes={"/notifications": lambda p: (_ for _ in ()).throw(RuntimeError("github down"))})
         bot.maybe_watch()
         assert bot.next_watch >= 300 and tg.sent() == []
+
+
+class TestResilience:
+    def test_run_survives_non_telegram_errors_in_poll_and_watch(self):
+        bot, _ = make_bot()
+        bot._sleep = lambda s: None
+        ticks = iter(range(0, 10**6, 1000))  # each clock read is 1000s later: the watch pause expires
+        bot.clock = lambda: next(ticks)
+        seen = []
+
+        def poll():
+            seen.append("poll")
+            if len(seen) == 1:
+                raise OSError("state file locked")
+
+        def watch():
+            seen.append("watch")
+            if seen.count("watch") == 1:
+                raise RuntimeError("brief composer bug")
+            bot.stopping = True
+
+        bot.poll_once, bot.maybe_watch = poll, watch
+        bot.run()  # must not raise: one bad tick may never take the bot down
+        assert seen == ["poll", "watch", "poll", "watch"]
+
+    def test_only_one_instance_can_hold_the_lock(self, isolated_state):
+        from src.bot.app import acquire_instance_lock
+        first = acquire_instance_lock()
+        assert first is not None and acquire_instance_lock() is None
+        first.close()
+        again = acquire_instance_lock()
+        assert again is not None
+        again.close()
 
 
 def test_voice_varies_and_addresses_operator():

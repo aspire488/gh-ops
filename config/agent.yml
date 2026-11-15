@@ -23,7 +23,8 @@ agent:
 proactive:
   enabled: true
   # Who sends proactive alerts and briefs (never both, so no duplicates):
-  #   "daemon"  = the local bot (python -m src.bot)
+  #   "daemon"  = the bot process (python -m src.bot), which runs 24/7 on Actions
+  #               via .github/workflows/kestrel-bot.yml
   #   "actions" = the Kestrel Proactive GitHub workflow every 15 min (no laptop needed;
   #               needs the KESTREL_GITHUB_TOKEN repo secret). Conversation still needs the daemon.
   runner: "daemon"

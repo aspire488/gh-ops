@@ -46,9 +46,14 @@ STATE_WRITING = (
 #: one of STATE_WRITING or STATE_FREE — asserted by test_state_lists_partition.
 STATE_FREE: tuple[str, ...] = ("ci.yml",)
 
+#: Workflows with their own isolated state (own cache prefix + concurrency
+#: group), never the shared gh-ops-state. The always-on bot holds its group for
+#: hours, so it must not block the state writers.
+OWN_STATE: dict[str, str] = {"kestrel-bot.yml": "kestrel-bot"}
+
 #: Repo CI workflows that do not dispatch a gh-ops job. They are validated for
 #: presence and state-partition only; job-dispatch tests use EXPECTED_WORKFLOWS.
-SUPPORT_WORKFLOWS: tuple[str, ...] = ("ci.yml",)
+SUPPORT_WORKFLOWS: tuple[str, ...] = ("ci.yml", "kestrel-bot.yml")
 
 #: SHA -> the version comment it must carry, so pins stay auditable.
 PINNED_ACTIONS = {
@@ -395,8 +400,17 @@ class TestStatePersistence:
     def test_state_lists_partition_all_workflows(self):
         """Each workflow is either state-writing or state-free — never both."""
         names = set(EXPECTED_WORKFLOWS) | set(SUPPORT_WORKFLOWS)
-        assert set(STATE_WRITING) | set(STATE_FREE) == names
-        assert not (set(STATE_WRITING) & set(STATE_FREE))
+        assert set(STATE_WRITING) | set(STATE_FREE) | set(OWN_STATE) == names
+        assert not (set(STATE_WRITING) & set(STATE_FREE) or set(OWN_STATE) & (set(STATE_WRITING) | set(STATE_FREE)))
+
+    @pytest.mark.parametrize("filename", sorted(OWN_STATE))
+    def test_own_state_workflows_are_isolated_from_shared_state(self, filename):
+        workflow = load_workflow(filename)
+        assert workflow["concurrency"] == {"group": OWN_STATE[filename], "cancel-in-progress": False}
+        for step in (s for s in _uses_steps(workflow) if "actions/cache" in s["uses"]):
+            assert step["with"]["key"].startswith(OWN_STATE[filename] + "-")
+            assert "gh-ops-state" not in str(step["with"])
+            assert "agent_conversations" not in step["with"]["path"]  # chat history never enters a cache
 
     @pytest.mark.parametrize("filename", STATE_WRITING)
     def test_restore_precedes_run_and_save_follows_it(self, filename):

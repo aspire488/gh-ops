@@ -5,7 +5,9 @@ GitHub read client, write executor, LLM providers, memory and watcher.
 """
 from __future__ import annotations
 
+import os
 import sys
+import threading
 from typing import Any
 
 from src.agent.actions import ActionQueue
@@ -13,7 +15,7 @@ from src.agent.agent import Agent
 from src.agent.attention import AttentionWatcher
 from src.agent.memory import ConversationStore
 from src.agent.tools import ToolRegistry
-from src.bot.app import POLL_TIMEOUT_S, BotConfig, KestrelBot
+from src.bot.app import POLL_TIMEOUT_S, BotConfig, KestrelBot, acquire_instance_lock
 from src.core.config import Config
 from src.github.client import GitHubClient
 from src.github.writer import GitHubWriter
@@ -36,6 +38,13 @@ def check() -> int:
     config = Config.load()
     cfg = BotConfig.from_config(config)
     print(f"authorized users: {len(cfg.allowed_users)}, chats: {len(cfg.allowed_chats)}")
+    probe = acquire_instance_lock()
+    if probe:
+        probe.close()
+        ok = False
+        print("daemon: NOT RUNNING (nobody is answering Telegram; start it with python -m src.bot)")
+    else:
+        print("daemon: running")
     try:
         client = GitHubClient()
         login = client.get("/user").get("login")
@@ -100,4 +109,13 @@ def build() -> KestrelBot:
 if __name__ == "__main__":
     if "--check" in sys.argv:
         raise SystemExit(check())
-    build().run()
+    lock = acquire_instance_lock()  # held until exit; the OS frees it if we crash
+    if lock is None:
+        raise SystemExit("Kestrel is already running (data/state/kestrel.lock is held); not starting a second poller")
+    bot = build()
+    max_runtime = float(os.environ.get("KESTREL_MAX_RUNTIME_S") or 0)
+    if max_runtime > 0:  # Actions: stop cleanly (state saved) before the job timeout; the next run takes over
+        timer = threading.Timer(max_runtime, bot._stop)
+        timer.daemon = True  # never keeps the process alive after run() returns
+        timer.start()
+    bot.run()

@@ -1,0 +1,85 @@
+# Kestrel, always on: the full Telegram bot (conversation + proactive watcher
+# + daily brief) running on Actions. No laptop and no local process needed.
+#
+# Each run long-polls Telegram for ~5h45m, then stops cleanly and saves state.
+# The hourly cron keeps one run queued behind the active one (concurrency
+# group below), so the next run starts seconds after the previous ends.
+# Superseded queued runs show as "cancelled": that is expected.
+#
+# Secrets: TELEGRAM_BOT_TOKEN, KESTREL_GITHUB_TOKEN (a personal token: the
+# Actions token cannot read /user or /notifications). GROQ_API_KEY and
+# GEMINI_API_KEY are optional; without them Kestrel still answers, deterministically.
+name: Kestrel Bot
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+# Exactly one poller per bot token: two would split updates and double-send alerts.
+concurrency:
+  group: kestrel-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bot:
+    name: Kestrel bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Only offset/mutes/brief date and watcher dedupe state are cached. Chat
+      # history is deliberately NOT: caches of a public repo are readable by
+      # fork-PR workflows, and conversations may mention private repos.
+      - name: Restore state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            data/state/agent_bot.json
+            data/state/agent_attention.json
+          key: kestrel-bot-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kestrel-bot-
+
+      - name: Run Kestrel
+        env:
+          GITHUB_TOKEN: ${{ secrets.KESTREL_GITHUB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_MODEL: openai/gpt-oss-120b,qwen/qwen3.8-27b,openai/gpt-oss-20b
+          GEMINI_MODEL: gemini-2.5-flash
+          GH_OPS_LLM_TIMEOUT_S: "45"
+          KESTREL_MAX_RUNTIME_S: "20700"
+        run: |
+          if [ -z "$GITHUB_TOKEN" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "::error::Add the KESTREL_GITHUB_TOKEN and TELEGRAM_BOT_TOKEN repository secrets"
+            exit 1
+          fi
+          python -u -m src.bot
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            data/state/agent_bot.json
+            data/state/agent_attention.json
+          key: kestrel-bot-${{ github.run_id }}-${{ github.run_attempt }}

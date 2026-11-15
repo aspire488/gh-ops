@@ -14,11 +14,12 @@ Reliability:
 from __future__ import annotations
 
 import contextlib
+import os
 import signal
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import IO, Any
 
 from src.agent import voice
 from src.agent.actions import ActionQueue
@@ -36,7 +37,31 @@ from src.utils.logging import get_logger
 logger = get_logger("bot")
 
 STATE_FILE = "agent_bot.json"
+LOCK_FILE = "kestrel.lock"
 POLL_TIMEOUT_S = 25
+
+
+def acquire_instance_lock() -> IO[str] | None:
+    """Exclusive OS lock held for the process lifetime (freed even on a crash).
+
+    None means another Kestrel is already polling: two pollers on one token
+    split updates between them and double-send proactive alerts.
+    """
+    path = state_store._state_dir() / LOCK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
 
 HELP = f"""Hey! I'm **{PERSONA}**, your GitHub sidekick. 🦅
 
@@ -139,6 +164,7 @@ class KestrelBot:
         self.star_memory: dict[str, int] = dict(saved.get("star_memory", {}))
         self.next_watch = 0.0
         self.watch_backoff = 0.0
+        self.watch_paused_until = 0.0
         self.stopping = False
 
     # ── persistence ──────────────────────────────────────────────
@@ -212,7 +238,18 @@ class KestrelBot:
                 logger.warning("getUpdates failed (%s, HTTP %s); retry in %ss", type(exc).__name__,
                                getattr(exc, "status_code", 0), wait)
                 self._sleep(wait)
-            self.maybe_watch()
+            except Exception as exc:  # e.g. state write failed: never let one bad poll kill the bot
+                failures += 1
+                logger.error("poll cycle failed (%s); retry in %ss", type(exc).__name__, min(60, 2 ** failures))
+                self._sleep(min(60, 2 ** failures))
+            if self.clock() < self.watch_paused_until:
+                continue
+            try:
+                self.maybe_watch()
+            except Exception as exc:  # proactive bugs must not take conversation down with them
+                self.watch_paused_until = self.clock() + self.cfg.poll_seconds
+                logger.error("proactive check failed (%s); paused %ss, chat unaffected",
+                             type(exc).__name__, self.cfg.poll_seconds)
         self._save()
         logger.info("%s stopped cleanly", PERSONA)
 

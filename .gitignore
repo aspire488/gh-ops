@@ -42,6 +42,8 @@ htmlcov/
 data/state/*.json
 data/state/*.jsonl
 data/state/.*.tmp
+data/state/*.lock
+data/logs/
 data/history/*.json
 data/cache/
 !data/state/.gitkeep

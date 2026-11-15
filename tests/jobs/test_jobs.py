@@ -92,6 +92,8 @@ def pipeline(monkeypatch: pytest.MonkeyPatch):
         record["persisted"] = state
 
     monkeypatch.setattr(jobs_module, "load_runtime_config", fake_load_runtime_config)
+    # The proactive job builds its own clients; fake it so no test talks to real services.
+    monkeypatch.setattr("src.bot.proactive.run_once", lambda config=None: {"fake": True})
     monkeypatch.setattr(jobs_module, "GitHubClient", lambda *a, **k: UnusedClient())
     monkeypatch.setattr(jobs_module, "load_previous_state", _empty_state)
     monkeypatch.setattr(jobs_module, "build_snapshot", fake_build_snapshot)

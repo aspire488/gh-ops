@@ -28,6 +28,7 @@ EXPECTED_WORKFLOWS = {
     "oss-hunter.yml": ("oss-hunt", ["0 12 * * *"]),
     "security.yml": ("security", ["0 2 * * *"]),
     "manual.yml": ("manual", []),
+    "kestrel-proactive.yml": ("proactive", ["7,22,37,52 * * * *"]),
 }
 
 #: Workflows that read-modify-write the shared state file.
@@ -38,6 +39,7 @@ STATE_WRITING = (
     "oss-hunter.yml",
     "security.yml",
     "manual.yml",
+    "kestrel-proactive.yml",
 )
 
 #: Workflows that never touch state. Every workflow must appear in exactly

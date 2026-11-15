@@ -2215,8 +2215,8 @@ grounding 14, context 9, context-headline 10, narratives 12, wiring 5) →
 
 ## Architectural Invariants
 
-1. **Read-only by default.** No GitHub writes without explicit human approval via `workflow_dispatch`.
-2. **Single API exit point.** All GitHub HTTP calls go through `src/github/client.py`.
+1. **Read-only by default.** No GitHub writes without explicit human approval: either `workflow_dispatch`, or a Kestrel proposal confirmed by the same authorized operator pressing Confirm in Telegram.
+2. **Single API exit point.** All GitHub reads go through `src/github/client.py` (GET-only). The only GitHub write exit is `src/github/writer.py` (9 allowlisted operations, no DELETE, one attempt per write).
 3. **Deterministic.** Same input → same output. No randomness in the event
    pipeline. The optional interpretation layer (Laya/LLM, section N) is
    display-only, fails to `None`, and never influences what the deterministic
@@ -2243,3 +2243,35 @@ grounding 14, context 9, context-headline 10, narratives 12, wiring 5) →
     intelligence / developer → notifications`, with `src/jobs/` composing them
     from above. No lower layer imports `src.jobs` except inside a `__main__`
     guard, which is enforced by test.
+
+
+---
+
+## Kestrel agent layer (conversational + proactive)
+
+Added on top of the batch engine; reuses its GitHub client, config, state helpers and Telegram transport.
+
+| Module | Responsibility |
+|---|---|
+| `src/bot/app.py` | Telegram long-poll loop, authorization, commands, progress→answer edits, Confirm/Cancel and mute buttons, proactive delivery |
+| `src/bot/__main__.py` | Composition root (`python -m src.bot`, `--check`) — the only place the write executor is constructed |
+| `src/agent/agent.py` | Bounded reasoning loop (≤8 model steps, ≤16 tool calls), system prompt (grounding, security, style) |
+| `src/agent/tools.py` | 27 typed tools: JSON-schema validation, strict name patterns, TTL+LRU cache, shaped results, errors-as-data |
+| `src/agent/memory.py` | Per-(chat,user) history: message/char caps, turn-boundary trimming, idle expiry |
+| `src/agent/attention.py` | Notifications → signals: scoring, CI collapse + persisted streak escalation, quiet hours, digest queue, mutes |
+| `src/agent/sweep.py` | Daily repo sweep (deterministic findings + age-based nudges), CI auto-diagnosis, LLM-or-deterministic brief |
+| `src/agent/voice.py` | Phrase pools for deterministic messages (friendly, varied; never jokey for critical alerts) |
+| `src/bot/proactive.py` | One proactive pass for GitHub Actions (`GHOPS_JOB=proactive`, `kestrel-proactive.yml`) |
+| `src/agent/actions.py` | Proposal → confirmation → single execution → audit log |
+| `src/agent/render.py` | Markdown subset → escaped Telegram HTML, safe 4096 splitting, GitHub link buttons |
+| `src/intelligence/llm.py` | `chat()`: OpenAI-compatible tool calling, failover chain, 429 waits, cooldowns, shape validation |
+| `src/github/writer.py` | Allowlisted writes only |
+| `src/research/feeds.py` | Official GitHub changelog (fixed URL, no credentials, DTD refused) |
+
+Persistent state (gitignored, atomic writes) in `data/state/`: `agent_bot.json` (update offset,
+mute tokens, surfaced OSS issues), `agent_attention.json`, `agent_conversations.json`,
+`agent_actions.json`, `agent_audit.jsonl`.
+
+Trust boundaries: Telegram input is trusted only from allow-listed users; everything returned
+by GitHub (and the changelog) is untrusted data. LLM output is untrusted too: it can only
+select tools whose arguments are validated, and it can only *propose* writes.

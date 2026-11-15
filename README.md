@@ -1,15 +1,15 @@
 <p align="center"><img src="assets/brand/readme-hero.svg" width="100%" alt="gh-ops — Observe the signal. Preserve the evidence."/></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/STATUS-FROZEN%20%2F%20MAINTENANCE-34342f?style=flat-square" alt="Frozen maintenance status">
-  <img src="https://img.shields.io/badge/TESTS-1495%20%2F%201495-34342f?style=flat-square" alt="1495 tests passing">
+  <img src="https://img.shields.io/badge/STATUS-ACTIVE%20%C2%B7%20KESTREL-34342f?style=flat-square" alt="Active development: Kestrel">
+  <img src="https://img.shields.io/badge/TESTS-__N__%20%2F%20__N__-34342f?style=flat-square" alt="__N__ tests passing">
   <img src="https://img.shields.io/badge/RUNTIME-PYTHON%203.10%2B-34342f?style=flat-square" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/LICENSE-MIT-34342f?style=flat-square" alt="MIT license">
 </p>
 
 # GitHub operations, made observable.
 
-**gh-ops is a deterministic GitHub operations and intelligence platform running on GitHub Actions.** It collects repository signals, detects meaningful changes, evaluates monitors, builds evidence-grounded reports, and delivers bounded notifications.
+**gh-ops is a deterministic GitHub operations and intelligence platform running on GitHub Actions, with Kestrel, a proactive Telegram agent, on top.** It collects repository signals, detects meaningful changes, evaluates monitors, builds evidence-grounded reports, and delivers bounded notifications.
 
 Its purpose is not to automate GitHub blindly. It is to make operational signals explainable, auditable, and safe to act on.
 
@@ -24,12 +24,14 @@ Its purpose is not to automate GitHub blindly. It is to make operational signals
 | Reporting | Developer activity, daily/weekly briefs, data-quality context |
 | Delivery | Outbound Telegram notifications with bounded retries |
 | Orchestration | Thin scheduled GitHub Actions workflows |
+| Kestrel (proactive) | Notification watcher, CI auto-diagnosis, daily repo sweep and brief, every 15 min in Actions |
+| Kestrel (conversation) | Telegram agent: 27 typed GitHub tools, Groq/Gemini tool calling, confirmation-gated writes |
 
-## Frozen engineering baseline
+## Engineering baseline
 
 <blockquote>
-  <strong>1,495 / 1,495 tests passing.</strong><br>
-  Implementation complete. The repository is in maintenance mode: evidence-driven fixes and hardening are welcome; feature expansion is not planned for this frozen baseline.
+  <strong>__N__ / __N__ tests passing</strong> (offline: a conftest guard blocks real network).<br>
+  The deterministic batch engine is stable; active development continues in Kestrel, the proactive agent layer.
 </blockquote>
 
 - Deterministic core and reporting pipeline
@@ -41,11 +43,228 @@ Its purpose is not to automate GitHub blindly. It is to make operational signals
 
 ## Operating principles
 
-1. **Read before acting** — collection is read-only; the system does not write to upstream repositories.
+1. **Read before acting**: collection is read-only. The only writes are Kestrel actions you explicitly confirm in Telegram (allowlisted, audited, single-execution).
 2. **Evidence before conclusions** — incomplete collection is reported as incomplete, never silently converted to zero.
 3. **Determinism by default** — state transitions, aggregation, prioritisation, and output ordering are reproducible.
 4. **Bounded delivery** — notifications have finite timeouts, bounded retries, escaping, and failure isolation.
 5. **Thin orchestration** — GitHub Actions schedules Python jobs; business logic stays in the application.
+
+## Kestrel: proactive GitHub intelligence agent
+
+**A GitHub intelligence agent you talk to on Telegram.** Kestrel investigates
+questions about your GitHub world using live data, watches your notifications
+for things that need you, and, only when you press Confirm, performs GitHub
+changes for you.
+
+> Lives in the `gh-ops` repository. `gh-ops` is also the batch monitoring engine
+> underneath (scheduled GitHub Actions jobs); Kestrel is the conversational and
+> proactive layer on top. Both share the same GitHub client, config and safety model.
+
+Illustrative shape of an answer (placeholders, not real output):
+
+```
+You:     why is CI failing on my <lib> PR?
+Kestrel: #<n> is blocked by 2 failing checks: "<job A>" and "<job B>".
+         <job B> fails in step "<step>": <first error annotation> …
+         → <concrete fix, marked as inference if it is one>
+         [↗ <lib> #<n>] [↗ <lib> run]
+```
+
+### What it does
+
+| Mode | What you get |
+|---|---|
+| **Conversational** | Ask anything in plain language. Kestrel plans an investigation, calls up to 16 read-only GitHub tools per turn, and answers from the evidence. Follow-ups keep context ("is CI passing *there*?"). |
+| **Proactive (the core)** | Runs in **GitHub Actions every 15 min, no laptop needed**, or in the local bot. It reads the notifications feed incrementally and collapses noise (50 CI notifications become "tests failing 7x on feat/x"). It scores every signal and pings you only for what needs you. Before alerting on a red build, it **auto-diagnoses** it, so the alert already names the failing job, step and error line. Every morning (09:00 IST) it **sweeps your repos** and sends a brief: red `main`, review requests aging, approved PRs you haven't merged, unanswered change requests, stale PRs, unreleased commits piling up, high/critical Dependabot alerts, and star spikes. Quiet hours hold non-critical alerts. **Works with or without LLM keys.** |
+| **Operational** | "Comment LGTM on kio #3", "rerun the failed jobs", "open an issue for this". Kestrel *proposes*; nothing happens until you press **Confirm**. Every proposal and outcome is audited. |
+| **Scheduled (existing)** | GitHub Actions jobs (`daily`, `monitoring`, `weekly-report`, `oss-hunt`, `security`) keep producing deterministic monitoring alerts and briefs. Unchanged. |
+
+#### Things you can ask
+
+- What needs my attention today? / What's waiting on me?
+- Why is CI failing on Kio? *(reads failed steps and error annotations)*
+- Is my PR ready to merge? *(per-reviewer review state, mergeability, checks)*
+- How healthy is AURA? *(push recency, stale PRs, CI success rate, community files, release lag)*
+- Which repos gained stars this month? Compare Kio and AURA.
+- Find me a Python issue worth contributing to. *(ranked; never re-suggests the same issue)*
+- Any critical pip advisories this week? Open Dependabot alerts on medimind?
+- What did GitHub announce this week? *(official github.blog changelog)*
+- Who is `<user>`, and what have they been working on?
+
+### Quick start
+
+```bash
+pip install -e ".[dev]"
+cp .env.example .env            # fill in TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, GROQ/GEMINI keys
+python -m src.bot --check       # live, read-only check of GitHub, Telegram and every LLM provider
+python -m src.bot               # run Kestrel (long-polling; Ctrl+C stops cleanly)
+```
+
+Then message your bot. `/help` lists examples. Commands:
+
+| Command | Does |
+|---|---|
+| `/start` | Welcome and what Kestrel can do (also just ask "who are you?") |
+| `/attention` | What needs you now: blocked PRs, review requests, collapsed new signals |
+| `/brief` | Run the full repo sweep now and get the brief |
+| `/status` | GitHub quota, per-provider LLM health and token use, watcher state |
+| `/reset` | Forget this conversation |
+| `/unmute` | Clear all mutes set from alert buttons |
+
+### Configuration
+
+**Secrets** live only in the environment or the gitignored `.env`. They are never
+read from config files and never logged.
+
+| Variable | Purpose |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
+| `GITHUB_TOKEN` | Classic PAT (`repo`, `notifications`) or fine-grained token. Writes need write access. |
+| `GH_OPS_LLM_PROVIDERS` | Failover order, e.g. `groq,gemini` |
+| `<NAME>_API_KEY`, `<NAME>_MODEL` | Per provider. `_MODEL` may list several models, comma-separated: each becomes a failover step. |
+| `GH_OPS_LLM_TIMEOUT_S` | Per-request LLM timeout (default 12; 45 recommended for tool use) |
+
+Built-in OpenAI-compatible endpoints: `groq`, `gemini`, `cerebras`, `openrouter`,
+`nvidia`, `together` (override with `<NAME>_BASE_URL`).
+
+**`config/agent.yml`** controls Kestrel:
+
+- `agent.allowed_user_ids` / `allowed_chat_ids`: who may talk to the bot. Empty
+  means the private chats listed in `config/telegram.yml`. Everyone else is ignored.
+- `agent.conversation`: history caps (40 messages / 30k chars) and idle expiry (12h).
+- `agent.write_actions`: enable writes, and which owners' repos may be written to
+  (default: only your own).
+- `agent.operator_name`: how Kestrel addresses you ("Hey Joel"). Kestrel talks like a
+  friendly engineer ("bro", "dude", varied openers) and stays direct for critical incidents.
+- `proactive.runner`: who sends proactive messages, `daemon` (the local bot) or
+  `actions` (the Kestrel Proactive workflow). Only one of them ever sends, so nothing is duplicated.
+- `proactive`: poll interval, immediate/digest thresholds, digest frequency, quiet
+  hours (`utc_offset: "+05:30"` = IST), `daily_brief_at` (local time), and the downtime catch-up window.
+
+#### Proactivity in GitHub Actions (recommended)
+
+`.github/workflows/kestrel-proactive.yml` runs `GHOPS_JOB=proactive` every 15 minutes.
+It does the watcher pass, auto-diagnosis, and the daily brief when due, then delivers
+to Telegram. State persists in the Actions cache like every other job. To enable it:
+
+1. Add repository secrets: `KESTREL_GITHUB_TOKEN` (a personal token, because the
+   Actions token cannot read `/notifications` or your other repos) and `TELEGRAM_BOT_TOKEN`.
+   Optional: `GROQ_API_KEY` / `GEMINI_API_KEY` for an LLM-written brief.
+   Without them the brief is deterministic.
+2. Set `proactive.runner: "actions"` in `config/agent.yml`.
+3. Keep running `python -m src.bot` only if you also want conversation and buttons.
+
+### How it works
+
+```
+Telegram ──getUpdates──▶ src/bot/app.py ──▶ src/agent/agent.py (bounded plan→tool→answer loop)
+   ▲                         │                    │
+   │ HTML, buttons,          │ watcher tick       ├─▶ src/agent/tools.py  (27 typed, validated, cached tools)
+   │ edits progress          ▼                    │        └─▶ src/github/client.py  (GET-only, retries, rate limits)
+   └──────────────── src/agent/attention.py       ├─▶ src/intelligence/llm.py (provider chain, tool calling)
+                      (notifications → signals)   └─▶ src/agent/actions.py ─(Confirm button)─▶ src/github/writer.py
+```
+
+- **Deterministic where it counts.** Collection, health metrics, scoring, dedup,
+  quiet hours, escalation and every state transition are code. The LLM chooses
+  what to look up, then interprets and writes. Tools return compact, shaped data,
+  never raw API dumps.
+- **Grounded.** The system prompt forbids stating current GitHub facts without a
+  tool result in the conversation, and forbids tying claims to a repo without evidence.
+- **Responses.** Answers lead with the verdict and adapt shape to intent (CI
+  failure: cause, evidence, fix; PR: verdict, blockers, next step). They're
+  rendered from a small markdown subset to Telegram HTML (fully escaped), split
+  under 4096 chars without breaking code blocks, and carry buttons for the
+  PRs, issues and runs they mention. A progress line ("Investigating the CI
+  failure…") is edited into the final answer.
+- **Proactive signals** explain *what changed, why it matters, what to do*, with a link and
+  mute buttons. CI failures are collapsed per (repo, workflow, branch); the
+  failure streak persists across polls and re-alerts only when it escalates
+  (1, then 2–4, then 5+). Default-branch failures rank higher.
+- **Provider resilience.** Each provider gets a timeout. HTTP 429 waits out the reset
+  (≤30s, shown as progress). 5xx and network errors back off, then fail over.
+  401/403 put the provider on a 30-min cooldown. Responses are shape-validated.
+  If all providers fail, you get a clear message; nothing crashes.
+
+#### Reliability
+
+- The update offset is persisted *before* each update is handled. A crash never
+  replays a message, so a write is never executed twice.
+- Watcher state (last check, delivered keys, CI streaks, mutes, digest queue)
+  is saved atomically. Alerts are marked delivered only after Telegram accepts
+  them. A Telegram outage leaves them queued, and a restart neither drops nor
+  duplicates them. Catch-up after downtime is bounded (3 days).
+- GitHub, LLM and Telegram failures are contained per unit of work, with capped backoff.
+  SIGINT/SIGTERM stop cleanly after the current update.
+
+### Security model
+
+- **Authorization:** only allow-listed Telegram user IDs in allow-listed chats get any
+  response, including button presses. Conversations are isolated per (chat, user).
+- **Read-only by default:** `src/github/client.py` is GET-only. The only write path is
+  `src/github/writer.py`: a fixed table of 9 operations (create issue, comment,
+  add labels, open/close, rerun failed jobs, dispatch workflow, update repo
+  description/homepage, set topics, create PR). There is no DELETE, no generic
+  request method, and only one attempt per write (a timeout is never retried
+  into a duplicate).
+- **Confirmation:** the model can only call `propose_action`. Execution requires the
+  *same* user to press Confirm within 15 minutes. Typed "yes" does not count.
+  The status is persisted as `executing` before the call, so it cannot replay.
+  Writes are limited to repos you own (configurable) and that the token can push to.
+  Audit log: `data/state/agent_audit.jsonl`.
+- **Prompt injection:** all tool output is framed as untrusted data. Tool arguments are
+  schema-validated, and repo/branch/path values must match strict GitHub name
+  patterns before any request, so injected text cannot redirect a request or
+  reach another host. Even a fully obeyed injection can at most queue a proposal
+  you would see and reject.
+- **Secrets:** env-only, redacted from logs. Exception text (which can contain URLs)
+  is never surfaced. `.env` and all runtime state are gitignored. CI uses repository
+  secrets, never local credentials.
+- **HTTP exits** are pinned by tests: the GitHub client, the GitHub writer, the LLM layer,
+  Telegram, and the single fixed github.blog feed URL.
+
+### Testing
+
+```bash
+pytest                                  # 1542 tests, ~10s, network blocked by a conftest guard
+python scripts/eval_agent.py            # LIVE response-quality eval (read-only, real LLM + GitHub)
+python scripts/eval_agent.py "question" # ad-hoc live question
+```
+
+`tests/agent/` covers tool validation and injection blocking, provider failover
+and 429 handling, multi-turn context and isolation, step budgets, prompt-injection
+write attempts, rendering and escaping, attention scoring, collapse, escalation,
+quiet hours, restart and delivery-failure recovery, the confirmation flow
+(single execution, other users, expiry, typed "yes"), and bot authorization.
+`scripts/eval_agent.py` prints real answers with the tools used and automatic
+flags (filler, raw JSON, unevidenced numbers) for a human to read.
+
+### Deployment
+
+Kestrel is a long-running process (it must poll Telegram), so it runs on a
+machine you control, not in GitHub Actions:
+
+- **Windows:** `pythonw -m src.bot` from the repo, or a Task Scheduler task "At log on".
+- **Linux:** a systemd unit with `WorkingDirectory=` set to the repo, running `python -m src.bot`, `Restart=on-failure`.
+- Run **one instance per bot token**. Telegram rejects concurrent pollers (HTTP 409);
+  Kestrel backs off and logs it.
+
+The scheduled jobs keep running in GitHub Actions as before (see ARCHITECTURE.md).
+
+### Limitations (honest)
+
+- **Free LLM quotas are the binding constraint.** Groq's free tier allows about 8k
+  tokens/min per model, and a multi-tool investigation can use 10–20k. Gemini's
+  free tier is 20 requests/day. Kestrel waits and fails over, but heavy use will
+  hit "providers rate-limited". Adding a paid tier or more providers fixes this.
+- Workflow logs aren't downloaded. CI explanations rely on failed step names
+  and check annotations, which cover most test and lint failures but not every crash.
+- Star-growth history scans stargazer timestamps, practical up to about 3k stars per repo.
+- The proactive watcher sees what GitHub notifications see (your subscriptions).
+  The repository-level monitors and briefs still come from the scheduled Actions jobs,
+  whose state lives in the Actions cache, separate from Kestrel's local state.
+- No webhooks: polling every 5 min means up to about 5 min of latency on alerts.
+- Quiet hours use a fixed UTC offset (no DST), by design: Windows Python lacks tz data.
 
 ## Documentation map
 
@@ -88,7 +307,7 @@ The dispatcher is the same code path in CI and locally:
 
 ```bash
 python -m src.jobs <job_name>          # daily | monitoring | weekly-report
-                                       # oss-hunt | security | status
+                                       # oss-hunt | security | status | proactive
 GHOPS_JOB=weekly-report python -m src.jobs
 
 python -m src.jobs                     # prints usage and exits 1
@@ -280,17 +499,18 @@ All API responses are parsed into frozen dataclasses in `src/github/models.py`:
 
 All models provide `to_dict()` for serialization and `from_api()` for parsing.
 
-## No GitHub Writes
+## GitHub Writes (confirmation-gated only)
 
-**gh-ops V1 performs zero write operations against the GitHub API.**
+**The batch engine performs zero writes.** `client.py` raises `WriteDeniedError`
+for anything but GET, as a hard guarantee.
 
-- No issue creation, commenting, or labeling
-- No pull request creation, merging, or reviewing
-- No release creation or asset uploading
-- No workflow triggering
-- No repository starring, watching, or forking
-
-The `WriteDeniedError` enforcement in `client.py` makes this a hard guarantee, not a convention.
+The only write path is Kestrel's `src/github/writer.py`: 9 allowlisted operations
+(create issue, comment, add labels, open/close, rerun failed jobs, dispatch
+workflow, update repo description/homepage, set topics, create PR). There is no
+DELETE, no merging, no releases, and no starring or forking. A write runs only
+after the same authorized Telegram user presses **Confirm** on a preview, once,
+within 15 minutes, on a repo they own and can push to. Every proposal and outcome
+is written to `data/state/agent_audit.jsonl`.
 
 ## State & Event Engine (Phase 3)
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gh-ops"
+name = "kestrel"
 version = "0.1.0"
-description = "A reusable, deterministic GitHub operations and intelligence platform"
+description = "Kestrel: a conversational, proactive GitHub intelligence agent (Telegram)"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",

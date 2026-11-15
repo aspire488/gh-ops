@@ -904,6 +904,17 @@ class TelegramTransport:
 
         return self._request("sendMessage", payload, chat_id=chat_id)
 
+    def call(self, method: str, payload: dict[str, Any], *, chat_id: str = "") -> dict[str, Any]:
+        """Any Bot API method, with the same retry/redaction guarantees.
+
+        Used by the interactive bot (src/bot) for getUpdates, editMessageText,
+        answerCallbackQuery, etc. The method name is a fixed identifier from code,
+        never user input.
+        """
+        if not method.isalnum():
+            raise TelegramError("invalid Bot API method", operation="call")
+        return self._request(method, payload, chat_id=chat_id)
+
     def close(self) -> None:
         """Close the underlying HTTP session, if it supports it."""
         close = getattr(self._session, "close", None)

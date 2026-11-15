@@ -21,6 +21,7 @@ on:
           - weekly-report
           - oss-hunt
           - security
+          - proactive
 
 # Shares the state concurrency group: a manual run must not interleave with a
 # scheduled read-modify-write run.

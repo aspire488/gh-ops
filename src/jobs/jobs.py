@@ -93,6 +93,7 @@ JOB_WEEKLY_REPORT = "weekly-report"
 JOB_OSS_HUNT = "oss-hunt"
 JOB_SECURITY = "security"
 JOB_STATUS = "status"
+JOB_PROACTIVE = "proactive"
 
 ALL_JOB_NAMES = (
     JOB_DAILY,
@@ -101,6 +102,7 @@ ALL_JOB_NAMES = (
     JOB_OSS_HUNT,
     JOB_SECURITY,
     JOB_STATUS,
+    JOB_PROACTIVE,
 )
 
 
@@ -1146,7 +1148,24 @@ def _system_health(state: CurrentState) -> dict[str, Any]:
     }
 
 
+def job_proactive(**kwargs: Any) -> JobResult:
+    """Kestrel proactive pass: notification watcher + auto-diagnosis + daily brief.
+
+    Works without any LLM key (deterministic alerts and brief). Delivery
+    failures leave signals queued in state for the next run, so they are
+    retried rather than lost.
+    """
+    try:
+        from src.bot.proactive import run_once  # lazy: keeps the job layer's import graph small
+
+        data = run_once()
+    except Exception as exc:
+        return _fatal(JOB_PROACTIVE, ErrorCode.INTERNAL_ERROR, f"Proactive pass failed ({type(exc).__name__})", exc)
+    return JobResult(job=JOB_PROACTIVE, success=True, data=data)
+
+
 _JOB_FUNCTIONS: dict[str, JobFunc] = {
+    JOB_PROACTIVE: job_proactive,
     JOB_DAILY: job_daily,
     JOB_MONITORING: job_monitoring,
     JOB_WEEKLY_REPORT: job_weekly_report,

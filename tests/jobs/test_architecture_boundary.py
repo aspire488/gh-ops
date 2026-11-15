@@ -194,8 +194,8 @@ class TestJobLayerDependencies:
                     violations.append(f"{path.name}: {pattern}")
         assert not violations, violations
 
-    def test_jobs_module_declares_all_six_job_names(self):
+    def test_jobs_module_declares_all_seven_job_names(self):
         from src.jobs.jobs import ALL_JOB_NAMES
 
-        assert len(ALL_JOB_NAMES) == 6
-        assert len(set(ALL_JOB_NAMES)) == 6
+        assert len(ALL_JOB_NAMES) == 7
+        assert len(set(ALL_JOB_NAMES)) == 7

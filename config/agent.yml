@@ -1,0 +1,42 @@
+# Kestrel — interactive agent + proactive watcher (python -m src.bot)
+agent:
+  # How Kestrel addresses you ("Hey Joel"). Empty = generic.
+  operator_name: "Joel"
+
+  # Telegram user IDs allowed to talk to the bot. Anyone else is ignored.
+  # Empty = fall back to the private-chat IDs in telegram.yml (a private
+  # chat's ID equals the user's ID).
+  allowed_user_ids: []
+  # Chats the bot answers in. Empty = the chat IDs in telegram.yml.
+  allowed_chat_ids: []
+
+  conversation:
+    max_messages: 40        # per (chat, user)
+    max_chars: 30000
+    ttl_hours: 12           # idle conversations are forgotten after this
+
+  write_actions:
+    enabled: true           # still requires a Confirm press for every write
+    # Owners whose repos may be written to. Empty = the authenticated user only.
+    allowed_owners: []
+
+proactive:
+  enabled: true
+  # Who sends proactive alerts and briefs (never both, so no duplicates):
+  #   "daemon"  = the local bot (python -m src.bot)
+  #   "actions" = the Kestrel Proactive GitHub workflow every 15 min (no laptop needed;
+  #               needs the KESTREL_GITHUB_TOKEN repo secret). Conversation still needs the daemon.
+  runner: "daemon"
+  poll_seconds: 300         # notifications check; never below GitHub's X-Poll-Interval
+  immediate_threshold: 65   # score >= this is pushed right away (critical >= 85 ignores quiet hours)
+  digest_min_score: 35      # below this, signals are dropped as noise
+  digest_hours: 4           # batch everything else into a digest at most this often
+  quiet_hours:
+    start: "23:00"
+    end: "07:00"
+    utc_offset: "+05:30"    # IST (India). Quiet hours and displayed times use this offset
+  max_catchup_days: 3       # after downtime, look back at most this far
+  waiting_on_me_in_digest: true
+  # Daily sweep of your repos (red main, stale/merge-ready PRs, unreleased work,
+  # security alerts, star spikes) written up as a brief. Local time; "" disables.
+  daily_brief_at: "09:00"

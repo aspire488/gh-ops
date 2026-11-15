@@ -39,6 +39,9 @@ HTTP_EXIT_MODULES = {
     SRC / "github" / "client.py",
     SRC / "notifications" / "telegram.py",
     SRC / "intelligence" / "llm.py",
+    # Added by the Kestrel agent layer. Each is narrow and has its own guard tests below.
+    SRC / "github" / "writer.py",   # allowlisted, confirmation-gated GitHub writes
+    SRC / "research" / "feeds.py",  # fixed github.blog changelog URL, no credentials
 }
 
 WRITE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -416,9 +419,28 @@ class TestSecurityAuditFindings:
                 modules_with_requests.append(path.relative_to(REPO_ROOT).as_posix())
         assert sorted(modules_with_requests) == [
             "src/github/client.py",
+            "src/github/writer.py",
             "src/intelligence/llm.py",
             "src/notifications/telegram.py",
+            "src/research/feeds.py",
         ]
+
+    def test_writer_is_only_used_by_the_bot_composition_root(self):
+        """Nothing but src/bot/__main__.py may construct the write executor."""
+        users = [path.relative_to(REPO_ROOT).as_posix() for path in _src_files()
+                 if "GitHubWriter(" in path.read_text(encoding="utf-8") and path.name != "writer.py"]
+        assert users == ["src/bot/__main__.py"]
+
+    def test_writer_has_no_delete_and_no_generic_request(self):
+        from src.github import writer
+
+        assert {m for m, _ in writer.OPERATIONS.values()} <= {"POST", "PATCH", "PUT"}
+        assert not hasattr(writer.GitHubWriter, "request") and not hasattr(writer.GitHubWriter, "execute")
+        assert writer.API_BASE == "https://api.github.com"
+
+    def test_feeds_exit_has_a_single_fixed_url_and_sends_no_auth(self):
+        source = (SRC / "research" / "feeds.py").read_text(encoding="utf-8")
+        assert source.count("https://") == 1 and "Authorization" not in source and "TOKEN" not in source
 
     def test_architecture_invariants_document_read_only(self):
         text = (REPO_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")

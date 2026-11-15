@@ -40,6 +40,8 @@ htmlcov/
 
 # Data (runtime state - do not commit secrets)
 data/state/*.json
+data/state/*.jsonl
+data/state/.*.tmp
 data/history/*.json
 data/cache/
 !data/state/.gitkeep
@@ -48,6 +50,7 @@ data/cache/
 # Environment / secrets
 .env
 .env.*
+!.env.example
 
 # Model weights (Laya checkpoint artifacts, never commit)
 *.safetensors
